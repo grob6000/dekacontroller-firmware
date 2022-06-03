@@ -1,0 +1,8 @@
+{
+    "configuration": "cpu=atmega328",
+    "board": "arduino:avr:mini",
+    "port": "COM4",
+    "programmer": "arduino:avrispmkii",
+    "sketch": "dekacontroller.ino",
+    "output": "../firmware_build"
+}
