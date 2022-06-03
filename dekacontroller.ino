@@ -3,7 +3,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <pins_arduino.h>
-#include <FastLED.h>
+#include <Adafruit_NeoPixel.h>
 #include <avr/interrupt.h>
 #include <avr/io.h>
 
@@ -21,6 +21,10 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define DATAX 45
 #define TIME_DATAX DATAX
 #define SYNC_DATAX DATAX
+#define GRAPH_Y0 40
+#define GRAPH_X0 20
+#define GRAPH_WIDTH 72
+#define GRAPH_HEIGHT 20
 #define ICON_HEIGHT   16
 #define ICON_WIDTH    16
 
@@ -37,6 +41,18 @@ volatile uint8_t ticker_debounce[BUTTONCOUNT] = {0};
 void (*buttonfunc[BUTTONCOUNT])() = {&button0, &button1, &button2, &button3};
 #define DEBOUNCETICKS 5 // x10ms approx
 
+// serial
+#define RX_BAUD 9600
+#define RX_UBRR (F_CPU/16/RX_BAUD-1)
+#define CR 0x0D
+#define LF 0x0A
+#define SERIALBUFFERSIZE 84
+#define P_MESSAGEID 0
+#define P_UTCTIME 1
+#define P_STATUS 2
+char serialbuffer[SERIALBUFFERSIZE] = "";
+volatile uint8_t serialbufferindex = 0;
+
 // advance outputs
 #define PIN_ADV_M 14
 #define PIN_ADV_H 15
@@ -44,7 +60,9 @@ void (*buttonfunc[BUTTONCOUNT])() = {&button0, &button1, &button2, &button3};
 // adressable led output
 #define PIN_LEDA 17
 #define NUM_LEDS 1
-CRGB leds[NUM_LEDS];
+Adafruit_NeoPixel pixels(NUM_LEDS, PIN_LEDA, NEO_GRB+NEO_KHZ800);
+//volatile uint8_t flashsetting = 0;
+//volatile uint8_t flashticker = 0;
 
 // zero state inputs
 #define PIN_M0 2
@@ -84,6 +102,8 @@ inline bool isFlag(uint8_t flag) {
 #define MODE_SYNC 2
 #define MODECOUNT 3
 volatile uint8_t displaymode = MODE_TIME;
+#define SETTINGCHANGETIMEOUT 255
+volatile uint8_t settingchangetimeout = 0;
 
 // sync states
 #define SYNC_IDLE 0
@@ -123,14 +143,14 @@ volatile uint8_t timeoutcount = 0;
 
 // time
 #define MINUTESPERDAY 1440
-#define TZINC 15 // minutes
+#define TZ_INC 15 // minutes
 volatile uint8_t hour_local = 0; //local
 volatile uint8_t minute_local = 0; //local
 volatile uint8_t second_local = 0;
 volatile int16_t tzoffset_minutes = 0;
 
 void setLocalTime(uint8_t hour_utc, uint8_t minute_utc, uint8_t second_utc) {
-  int16_t hm = hour_utc + minute_utc;
+  int16_t hm = hour_utc*60 + minute_utc;
   hm += tzoffset_minutes;
   hm %= MINUTESPERDAY;
   if (hm < 0) {
@@ -171,6 +191,26 @@ int16_t drifthistory_getmaxmagnitude() {
   return max;
 }
 
+void RxInit() {
+  UBRR0H = (uint8_t)(RX_UBRR>>8);
+  UBRR0L = (uint8_t)(RX_UBRR);
+  UCSR0B = (1<<RXEN0)|(1<<RXCIE0);
+  UCSR0C = (3<<UCSZ00);
+}
+
+ISR(USART_RX_vect) {
+  char c = UDR0;
+  if (c == '$') {
+    serialbufferindex = 0;
+  }
+  serialbuffer[serialbufferindex] = c;
+  serialbufferindex++;
+  serialbufferindex%=SERIALBUFFERSIZE;
+  if (c == LF) {
+    processGPS();
+  }
+}
+
 void setup() {
 
   // setup io
@@ -188,8 +228,12 @@ void setup() {
   pinMode(PIN_RUN_IN, INPUT_PULLUP);
   pinMode(PIN_RUN_OUT, OUTPUT);
 
+  // setup serial for GPS
+  //Serial.begin(9600);
+  RxInit();
+
   // setup led
-  //FastLED.addLeds<NEOPIXEL, PIN_LEDA>(leds, NUM_LEDS); 
+  pixels.clear();
 
   // setup display
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
@@ -201,13 +245,18 @@ void setup() {
   // splash
   displaySplash();
   display.display(); // force update display (loop including updated not yet be running)
-  delay(500);
   // LED startup
-  //leds[0].setRGB(255,0,0);
+  pixels.setPixelColor(0, pixels.Color(0,0,0));
+  pixels.show();
+  delay(500);  
+  pixels.setPixelColor(0, pixels.Color(255,0,0));
+  pixels.show();
   delay(500);
-  //leds[0].setRGB(0,255,0);
+  pixels.setPixelColor(0, pixels.Color(0,255,0));
+  pixels.show();
   delay(500);
-  //leds[0].setRGB(0,0,255);
+  pixels.setPixelColor(0, pixels.Color(0,0,255));
+  pixels.show();
   delay(500);
 
 
@@ -223,8 +272,7 @@ void setup() {
   PCMSK2 = 0b10000000;
   PCMSK0 = 0b0000111;
   
-  // setup serial for GPS
-  //Serial.begin(9600);
+
 }
 
 ISR(PCINT0_vect) {
@@ -327,6 +375,20 @@ void displayUpdateTime() {
     char stime[] = " 00:00:00";
     formatTimeHHMMSS(&stime[1], hour_local, minute_local, second_local);
     display.print(stime);
+    display.fillRect(TIME_DATAX, 40, display.width()-TIME_DATAX,8,SSD1306_BLACK);
+    display.setCursor(TIME_DATAX,40);
+    display.print(F("F="));
+    if (isFlag(FLAG_GPS_HASFIX)) {
+      display.print(F("Y"));
+    } else {
+      display.print(F("N"));
+    }
+    display.print(F(" T="));
+    if (isFlag(FLAG_GPS_HASTIME)) { 
+      display.print(F("Y"));
+    } else {
+      display.print(F("N"));
+    }
     setFlag(FLAG_DISPLAYCHANGE);
   }
 }
@@ -336,9 +398,9 @@ void displayUpdateTimezone() {
     display.fillRect(TIME_DATAX, 30, display.width()-TIME_DATAX,8,SSD1306_BLACK);
     display.setCursor(TIME_DATAX,30);
     if (tzoffset_minutes >= 0) {
-      display.print("+");
+      display.print(F("+"));
     } else {
-      display.print("-");
+      display.print(F("-"));
     }
     char s[] = "00:00";
     formatTimeHHMM(s, abs(tzoffset_minutes)/60, abs(tzoffset_minutes)%60);
@@ -354,23 +416,24 @@ void displayTimes() {
   display.drawBitmap(0, 0, icon_clock, ICON_WIDTH, ICON_HEIGHT, 1);
   display.setTextSize(2);  
   display.setCursor(20,0);
-  display.print("TIME");
+  display.print(F("TIME"));
   // local time
   display.setTextSize(1);
   display.setCursor(0,20);
-  display.print("TIME:");
-  displayUpdateTime();
+  display.print(F("TIME:"));
   // offset
   display.setCursor(0,30);
-  display.print("OFFSET:");
+  display.print(F("OFFSET:"));
+  // gps status
+  display.setCursor(0,40);
+  display.print(F("GPS:"));
+  // update
+  displayUpdateTime();
   displayUpdateTimezone();
   setFlag(FLAG_DISPLAYCHANGE);
 }
 
-#define GRAPH_Y0 40
-#define GRAPH_X0 20
-#define GRAPH_WIDTH 72
-#define GRAPH_HEIGHT 20
+
 
 void displayDrift() {
   display.clearDisplay();
@@ -390,16 +453,16 @@ void displayDrift() {
   display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0+(GRAPH_HEIGHT/2),2,SSD1306_WHITE); // bottom intermediate tick  
   display.setTextSize(1);
   display.setCursor(0, GRAPH_Y0-GRAPH_HEIGHT-4);
-  display.print("+");
+  display.print(F("+"));
   display.print(fullscale);
   display.setCursor(0, GRAPH_Y0-(GRAPH_HEIGHT/2)-4);
-  display.print("+");
+  display.print(F("+"));
   display.print(fullscale/2);
   display.setCursor(0, GRAPH_Y0+GRAPH_HEIGHT-4);
-  display.print("-");
+  display.print(F("-"));
   display.print(fullscale);
   display.setCursor(0, GRAPH_Y0+(GRAPH_HEIGHT/2)-4);
-  display.print("-");
+  display.print(F("-"));
   display.print(fullscale/2);
   // data
   for (uint8_t i = 0; i < DRIFT_HISTORY_LENGTH; i++) {
@@ -412,10 +475,16 @@ void displayDrift() {
 
 void displayUpdateSyncState() {
   if (displaymode == MODE_SYNC) { // only update if in the correct mode
-    display.fillRect(SYNC_DATAX, 40, display.width()-SYNC_DATAX,8,SSD1306_BLACK);
+    display.fillRect(SYNC_DATAX, 40, display.width()-SYNC_DATAX,18,SSD1306_BLACK);
     display.setCursor(SYNC_DATAX, 40);
     display.setTextSize(1);
     display.print((__FlashStringHelper *)pgm_read_word(&syncstrings[syncstate]));
+    display.setCursor(SYNC_DATAX, 50);
+    if (syncstate > SYNC_IDLE) {
+      char s[5] = "00:00";
+      formatTimeHHMM(s, marktime/60, marktime%60);
+      display.print(s);
+    }
     setFlag(FLAG_DISPLAYCHANGE);
   }
 }
@@ -429,16 +498,12 @@ void displaySync() {
   display.print(F("RUN SYNC"));
   // instructions
   display.setTextSize(1);
-  display.setCursor(0,20);
-  display.print(F("UP:"));
-  display.setCursor(SYNC_DATAX,20);
-  display.print(F("Start synch"));
-  display.setCursor(0,30);
-  display.print(F("DOWN:"));
-  display.setCursor(SYNC_DATAX,30);
-  display.print(F("Stop & zero"));
+  display.setCursor(0,25);
+  display.print(F("PRESS UP TO START"));
   display.setCursor(0,40);
-  display.print("STATUS:");
+  display.print(F("STATUS:"));
+  display.setCursor(0,50);
+  display.print(F("MARK:"));
   displayUpdateSyncState();
   // update
   setFlag(FLAG_DISPLAYCHANGE);
@@ -472,17 +537,6 @@ void displaySplash() {
   setFlag(FLAG_DISPLAYCHANGE);
 }
 
-/*
-#define CR 0x0D
-#define LF 0x0A
-#define SERIALBUFFERSIZE 84
-#define P_MESSAGEID 0
-#define P_UTCTIME 1
-#define P_STATUS 2
-
-char serialbuffer[SERIALBUFFERSIZE] = "";
-volatile uint8_t serialbufferindex = 0;
-
 void processGPS() {
   if ((serialbuffer[0] == '$') && (serialbuffer[3] == 'R') & (serialbuffer[4] == 'M') && (serialbuffer[5] == 'C')) {
     //GPRMC
@@ -504,9 +558,10 @@ void processGPS() {
             }
             break;
           case P_STATUS:
-            if (serialbuffer[i+1] == 'A') {
+            if (serialbuffer[i0+1] == 'A') {
               setFlag(FLAG_GPS_HASFIX);
-            } else {
+              setFlag(FLAG_GPS_OLDFIX);
+            } else if (serialbuffer[i+1] == 'V') {
               clearFlag(FLAG_GPS_HASFIX);
             }
             break;
@@ -517,29 +572,43 @@ void processGPS() {
     }
   }
 }
-*/
+
+
+volatile uint8_t subdiv = 0;
+//bool flashon = false;
 
 void loop() {
   delay(10); // ticker 10ms
-  // read serial data
-  /*
-  while (Serial.available()) {
-    char c = Serial.read();
-    if (c == '$') {
-      // force start of message
-      serialbufferindex = 0;
+  subdiv++;
+  // update LED status (every 320ms approx)
+  
+  if (subdiv%64==0) {
+    if ((!isFlag(FLAG_GPS_HASTIME)) || (!isFlag(FLAG_RUN_OK)) || (!isFlag(FLAG_TIME_SYNCED))) {
+      // error
+      pixels.setPixelColor(0, pixels.Color(255,0,0));
+    } else if ((!isFlag(FLAG_GPS_HASFIX)) || isFlag(FLAG_TIME_DRIFT)) {
+      // warning
+      pixels.setPixelColor(0, pixels.Color(128,128,0));
+    } else {
+      // ok
+      pixels.setPixelColor(0, pixels.Color(0,255,0));
     }
-    serialbuffer[serialbufferindex]=c;
-    serialbufferindex++;
+    pixels.show();
   }
-  if ((serialbufferindex > 10) && (serialbuffer[serialbufferindex-2]==CR) && (serialbuffer[serialbufferindex-1]==LF)) {
-    // end of gps message
-    processGPS();
-    serialbufferindex = 0;
-  }
-  if (serialbufferindex >= SERIALBUFFERSIZE) {
-    //overrun: restart; ignore
-    serialbufferindex = 0;
+  /*
+  if (flashsetting > 0) {
+    if (flashticker == 0) {
+      flashon = !flashon;
+      if (flashon) {
+        FastLED.setBrightness(255);
+        FastLED.show();
+      } else {
+        FastLED.setBrightness(0);
+        FastLED.show();
+      }
+      flashticker = flashsetting;
+    }
+    flashticker--;
   }
   */
   // button debouncing
