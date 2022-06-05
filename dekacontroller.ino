@@ -6,6 +6,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <avr/interrupt.h>
 #include <avr/io.h>
+#include <avr/eeprom.h>
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
@@ -68,7 +69,7 @@ Adafruit_NeoPixel pixels(NUM_LEDS, PIN_LEDA, NEO_GRB+NEO_KHZ800);
 #define PIN_M0 2
 #define PIN_M00 3
 #define PIN_H0 4
-#define PIN_H00 4
+#define PIN_H00 5
 
 // run control / monitor
 #define PIN_RUN_IN 6
@@ -102,7 +103,7 @@ inline bool isFlag(uint8_t flag) {
 #define MODE_SYNC 2
 #define MODECOUNT 3
 volatile uint8_t displaymode = MODE_TIME;
-#define SETTINGCHANGETIMEOUT 255
+#define SETTINGCHANGETIMEOUT 62 // x80ms (c. 5sec)
 volatile uint8_t settingchangetimeout = 0;
 
 // sync states
@@ -123,14 +124,14 @@ const char syncstring3[] PROGMEM = "Zero Hour";
 const char syncstring4[] PROGMEM = "Set Hour";
 const char syncstring5[] PROGMEM = "Set Min";
 const char syncstring6[] PROGMEM = "Wait Mark";
-const char syncstring7[] PROGMEM = "ERROR";
+const char syncstring7[] PROGMEM = "Error";
 const char* const syncstrings[] PROGMEM = {syncstring0, syncstring1, syncstring2, syncstring3, syncstring4, syncstring5, syncstring6, syncstring7};
 
 // sync parameters
 #define SYNC_DURATION 2 // minutes
 #define SYNC_PULSETICKS 5 // x10ms
 #define SYNC_PULSEPERIOD 30 // x10ms
-#define SYNC_RUNTIMEOUT 500 // x10ms
+#define SYNC_RUNTIMEOUT 50 // x100ms
 #define SYNC_MAXZERO_M 10 // max presses to zero M0
 #define SYNC_MAXZERO_H 24 // max presses to zero H0 + H00
 
@@ -148,6 +149,7 @@ volatile uint8_t hour_local = 0; //local
 volatile uint8_t minute_local = 0; //local
 volatile uint8_t second_local = 0;
 volatile int16_t tzoffset_minutes = 0;
+int16_t EEMEM tzoffset_ee = 0;
 
 void setLocalTime(uint8_t hour_utc, uint8_t minute_utc, uint8_t second_utc) {
   int16_t hm = hour_utc*60 + minute_utc;
@@ -221,16 +223,18 @@ void setup() {
   pinMode(PIN_ADV_M, OUTPUT);
   pinMode(PIN_ADV_H, OUTPUT);
   pinMode(PIN_LEDA, OUTPUT);
-  pinMode(PIN_M0, INPUT);
-  pinMode(PIN_M00, OUTPUT);
-  pinMode(PIN_H0, OUTPUT);
-  pinMode(PIN_H00, OUTPUT);
+  pinMode(PIN_M0, INPUT_PULLUP);
+  pinMode(PIN_M00, INPUT_PULLUP);
+  pinMode(PIN_H0, INPUT_PULLUP);
+  pinMode(PIN_H00, INPUT_PULLUP);
   pinMode(PIN_RUN_IN, INPUT_PULLUP);
   pinMode(PIN_RUN_OUT, OUTPUT);
 
-  // setup serial for GPS
-  //Serial.begin(9600);
-  RxInit();
+  // load eeprom settings
+  int16_t tzo_temp = eeprom_read_word(&tzoffset_ee);
+  if ((tzo_temp < MINUTESPERDAY/2) && (tzo_temp > -1*MINUTESPERDAY/2)) {
+    tzoffset_minutes = (tzo_temp / TZ_INC) * TZ_INC;
+  }
 
   // setup led
   pixels.clear();
@@ -272,6 +276,9 @@ void setup() {
   PCMSK2 = 0b10000000;
   PCMSK0 = 0b0000111;
   
+  // setup serial for GPS
+  //Serial.begin(9600);
+  RxInit();
 
 }
 
@@ -357,6 +364,7 @@ void tz_increase() {
   if (tzoffset_minutes > (12*60)) {
     tzoffset_minutes = (12*60);
   }
+  settingchangetimeout = SETTINGCHANGETIMEOUT;
 }
 
 void tz_decrease() {
@@ -364,6 +372,7 @@ void tz_decrease() {
   if (tzoffset_minutes < (-12*60)) {
     tzoffset_minutes = (-12*60);
   }
+  settingchangetimeout = SETTINGCHANGETIMEOUT;
 }
 
 
@@ -481,7 +490,7 @@ void displayUpdateSyncState() {
     display.print((__FlashStringHelper *)pgm_read_word(&syncstrings[syncstate]));
     display.setCursor(SYNC_DATAX, 50);
     if (syncstate > SYNC_IDLE) {
-      char s[5] = "00:00";
+      char s[] = "00:00";
       formatTimeHHMM(s, marktime/60, marktime%60);
       display.print(s);
     }
@@ -580,20 +589,28 @@ volatile uint8_t subdiv = 0;
 void loop() {
   delay(10); // ticker 10ms
   subdiv++;
-  // update LED status (every 320ms approx)
-  
-  if (subdiv%64==0) {
-    if ((!isFlag(FLAG_GPS_HASTIME)) || (!isFlag(FLAG_RUN_OK)) || (!isFlag(FLAG_TIME_SYNCED))) {
-      // error
-      pixels.setPixelColor(0, pixels.Color(255,0,0));
-    } else if ((!isFlag(FLAG_GPS_HASFIX)) || isFlag(FLAG_TIME_DRIFT)) {
-      // warning
-      pixels.setPixelColor(0, pixels.Color(128,128,0));
-    } else {
-      // ok
-      pixels.setPixelColor(0, pixels.Color(0,255,0));
+  if (subdiv%8==0) {
+    // settingtimeout
+    if (settingchangetimeout > 0) {
+      settingchangetimeout--;
+      if (settingchangetimeout==0) {
+        eeprom_update_word(&tzoffset_ee, tzoffset_minutes);
+      }
     }
-    pixels.show();
+    // update LED status (every 320ms approx)
+    if (subdiv%64==0) {
+      if ((!isFlag(FLAG_GPS_HASTIME)) || (!isFlag(FLAG_RUN_OK)) || (!isFlag(FLAG_TIME_SYNCED))) {
+        // error
+        pixels.setPixelColor(0, pixels.Color(255,0,0));
+      } else if ((!isFlag(FLAG_GPS_HASFIX)) || isFlag(FLAG_TIME_DRIFT)) {
+        // warning
+        pixels.setPixelColor(0, pixels.Color(128,128,0));
+      } else {
+        // ok
+        pixels.setPixelColor(0, pixels.Color(0,255,0));
+      }
+      pixels.show();
+    }
   }
   /*
   if (flashsetting > 0) {
@@ -628,8 +645,8 @@ void loop() {
   // sync process
   if (syncstate != SYNC_IDLE) {
     if (ticker_adv == 0) { // reset advance pins (low --> inactive)
-      digitalWrite(PIN_M0, 0);
-      digitalWrite(PIN_H0, 0);
+      digitalWrite(PIN_ADV_H, 0);
+      digitalWrite(PIN_ADV_M, 0);
     } else {
       ticker_adv--;
     }
@@ -646,6 +663,7 @@ void loop() {
               syncstate = SYNC_ERROR;
               displayUpdateSyncState();
             }
+            ticker_sync = 10; // 100ms until resample
           } else {
             // low = voltage on reset line (not running); proceed
             syncstate = SYNC_ZERO_M0;
@@ -675,6 +693,7 @@ void loop() {
           break;
         case SYNC_ZERO_H:
           if (digitalRead(PIN_H0) || digitalRead(PIN_H00)) { // either H0 or H00 not zero
+            timeoutcount++;
             if (timeoutcount > SYNC_MAXZERO_H) {
               // too many presses; error!
               syncstate = SYNC_ERROR;
@@ -719,6 +738,7 @@ void loop() {
           if ((hour_local*60 + minute_local) == (marktime)) {
             digitalWrite(PIN_RUN_OUT, 1); // high = run
             syncstate = SYNC_IDLE;
+            displayUpdateSyncState();
           }
           break;
         case SYNC_IDLE:
