@@ -38,8 +38,19 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define PIN_BUTTON2 9
 #define PIN_BUTTON3 10
 const uint8_t buttonpin[BUTTONCOUNT] = {7,8,9,10};
-volatile uint8_t ticker_debounce[BUTTONCOUNT] = {0};
-void (*buttonfunc[BUTTONCOUNT])() = {&button0, &button1, &button2, &button3};
+
+// debounce handling (buttons + m0)
+#define INPUTSTATE_BUTTON0 0x01
+#define INPUTSTATE_BUTTON1 0x02
+#define INPUTSTATE_BUTTON2 0x04
+#define INPUTSTATE_BUTTON3 0x08
+#define INPUTSTATE_M0 0x10
+//#define INPUTSTATE_M00 0x20 //reserved
+//#define INPUTSTATE_H0 0x40  /reserved
+//#define INPUTSTATE_H00 0x80 //reserved
+volatile uint8_t lastinputstate = 0x00;
+volatile uint8_t ticker_debounce[BUTTONCOUNT+1] = {0}; // buttongs + M0
+void (*debouncefunc[])() = {&button0, &button1, &button2, &button3, &m0low};
 #define DEBOUNCETICKS 5 // x10ms approx
 
 // serial
@@ -272,9 +283,10 @@ void setup() {
   // BUTTON1  D8  PB0  PCINT0
   // BUTTON2  D9  PB1  PCINT1
   // BUTTON3  D10 PB2  PCINT2 
+  // M0       D2  PD2  PCINT18
   PCICR =  0b00000101;
-  PCMSK2 = 0b10000000;
-  PCMSK0 = 0b0000111;
+  PCMSK2 = 0b10000100; // PCINT 18, 23
+  PCMSK0 = 0b0000111; // PCINT 0, 1, 2
   
   // setup serial for GPS
   //Serial.begin(9600);
@@ -282,21 +294,39 @@ void setup() {
 
 }
 
+
 ISR(PCINT0_vect) {
   for (uint8_t i=1; i<BUTTONCOUNT; i++) { // buttons 1,2,3
     if (!digitalRead(buttonpin[i])) { // low = pressed
-      ticker_debounce[i] = DEBOUNCETICKS; // start debounce timer
+      if (lastinputstate & (1<<i)) { // & laststate = high
+        ticker_debounce[i] = DEBOUNCETICKS; // start debounce timer
+      }
+      lastinputstate &= ~(1<<i); // clear state bit
     } else {
       ticker_debounce[i] = 0; // cancel debounce timer
+      lastinputstate |= (1<<i); // set state bit
     }
   }
 }
 
 ISR(PCINT2_vect) {
   if (!digitalRead(buttonpin[0])) { // low = pressed; button 0 only
-    ticker_debounce[0] = DEBOUNCETICKS; // start debounce timer
+    if (lastinputstate & INPUTSTATE_BUTTON0) {
+      ticker_debounce[0] = DEBOUNCETICKS; // start debounce timer
+    }
+    lastinputstate &= INPUTSTATE_BUTTON0; // clear state bit
   } else {
     ticker_debounce[0] = 0; // cancel debounce timer
+    lastinputstate |= INPUTSTATE_BUTTON0; // set state bit
+  }
+  if (!digitalRead(PIN_M0)) { // low = zero
+    if (lastinputstate & INPUTSTATE_M0) { // & laststate = high (wasn't zero)
+      ticker_debounce[BUTTONCOUNT] = DEBOUNCETICKS; // start debounce timer
+    }
+    lastinputstate &= INPUTSTATE_M0; // clear state bit
+  } else {
+    ticker_debounce[BUTTONCOUNT] = 0; // cancel debounce timer
+    lastinputstate |= INPUTSTATE_M0; // set state bit
   }
 }
 
@@ -354,7 +384,11 @@ void button2(void) {
 }
 
 void button3() {
+  // no actions for b3
+}
 
+void m0low() {
+  }
 }
 
 
@@ -629,11 +663,11 @@ void loop() {
   }
   */
   // button debouncing
-  for (uint8_t i = 0; i < 4; i++) {
+  for (uint8_t i = 0; i < BUTTONCOUNT+1; i++) {
     if ((ticker_debounce[i]) > 0) {
       ticker_debounce[i]--;
       if (ticker_debounce[i] == 0) {
-        buttonfunc[i]();
+        debouncefunc[i]();
       }
     }
   }
