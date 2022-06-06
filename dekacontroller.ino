@@ -182,6 +182,7 @@ void setLocalTime(uint8_t hour_utc, uint8_t minute_utc, uint8_t second_utc) {
 #define DRIFT_HISTORY_LENGTH 144 // 10 min interval for 24h
 int16_t drift_history[DRIFT_HISTORY_LENGTH] = {0};
 uint8_t drift_history_index = 0; // index for drift history (circular buffer)
+volatile int16_t drift_current = 0; // value to be updated live
 
 int16_t drifthistory_getat(uint8_t i) {
   return drift_history[(drift_history_index-i)%DRIFT_HISTORY_LENGTH];
@@ -397,6 +398,7 @@ void m0low() {
     timetracked %= MINUTESPERDAY; // around the clock
     bool checkok = true;
     // TO-DO check zero signals
+    drift_current = timetracked - (hour_local*60 + minute_local); // update live drift (pushed into array by GPS clock)
   }
 }
 
@@ -516,7 +518,7 @@ void displayDrift() {
   display.print(fullscale/2);
   // data
   for (uint8_t i = 0; i < DRIFT_HISTORY_LENGTH; i++) {
-    display.drawPixel(GRAPH_X0+(i*DRIFT_HISTORY_LENGTH)/GRAPH_WIDTH,GRAPH_Y0+drifthistory_getat(i)*GRAPH_HEIGHT/fullscale,SSD1306_WHITE);
+    display.drawPixel(GRAPH_X0+(i*GRAPH_WIDTH)/DRIFT_HISTORY_LENGTH,GRAPH_Y0+drifthistory_getat(i)*GRAPH_HEIGHT/fullscale,SSD1306_WHITE);
   }
   // update
   setFlag(FLAG_DISPLAYCHANGE);
@@ -602,6 +604,9 @@ void processGPS() {
               uint8_t s = (serialbuffer[i0+5]-'0')*10 + (serialbuffer[i0+6]-'0');
               setLocalTime(h,m,s);
               setFlag(FLAG_GPS_HASTIME);
+              if ((isFlag(FLAG_TIME_SYNCED)) && (s==0) && (h%10==0)) { // in sync, and it's a 10-minute line
+                drifthistory_append(drift_current); // append last measured drift history
+              }
               displayUpdateTime();
             } else {
               clearFlag(FLAG_GPS_HASTIME);
@@ -784,6 +789,7 @@ void loop() {
         case SYNC_WAITMARK:
           if ((hour_local*60 + minute_local) == (marktime)) {
             digitalWrite(PIN_RUN_OUT, 1); // high = run
+            timetracked = marktime; // init tracking time to mark time
             setFlag(FLAG_TIME_SYNCED);
             syncstate = SYNC_IDLE;
             displayUpdateSyncState();
