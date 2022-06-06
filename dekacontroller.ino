@@ -480,10 +480,10 @@ void displayTimes() {
 
   display.clearDisplay();
   // top line
-  display.drawBitmap(0, 0, icon_clock, ICON_WIDTH, ICON_HEIGHT, 1);
-  display.setTextSize(2);  
-  display.setCursor(20,0);
-  display.print(F("TIME"));
+  //display.drawBitmap(0, 0, icon_clock, ICON_WIDTH, ICON_HEIGHT, 1);
+  //display.setTextSize(2);  
+  //display.setCursor(20,0);
+  //display.print(F("TIME"));
   // local time
   display.setTextSize(1);
   display.setCursor(0,20);
@@ -497,18 +497,23 @@ void displayTimes() {
   // update
   displayUpdateTime();
   displayUpdateTimezone();
+  displayUpdateIcons();
   setFlag(FLAG_DISPLAYCHANGE);
 }
 
-
+void displayUpdateDriftChart() {
+  if (displaymode == MODE_DRIFT) {
+    displayDrift(); // just do the whole schebang
+  }
+}
 
 void displayDrift() {
   display.clearDisplay();
   // top line
-  display.drawBitmap(0, 0, icon_drift, ICON_WIDTH, ICON_HEIGHT, 1);
-  display.setTextSize(2);
-  display.setCursor(20,0);
-  display.print(F("DRIFT"));
+  //display.drawBitmap(0, 0, icon_drift, ICON_WIDTH, ICON_HEIGHT, 1);
+  //display.setTextSize(2);
+  //display.setCursor(20,0);
+  //display.print(F("DRIFT"));
   // determine scale
   int16_t fullscale = (drifthistory_getmaxmagnitude()/20 + 1)*20;
   // graph
@@ -535,6 +540,7 @@ void displayDrift() {
   for (uint8_t i = 0; i < DRIFT_HISTORY_LENGTH; i++) {
     display.drawPixel(GRAPH_X0+(i*GRAPH_WIDTH)/DRIFT_HISTORY_LENGTH,GRAPH_Y0+drifthistory_getat(i)*GRAPH_HEIGHT/fullscale,SSD1306_WHITE);
   }
+  displayUpdateIcons();
   // update
   setFlag(FLAG_DISPLAYCHANGE);
 }
@@ -559,10 +565,10 @@ void displayUpdateSyncState() {
 void displaySync() {
   display.clearDisplay();
   // top line
-  display.drawBitmap(0, 0, icon_run, ICON_WIDTH, ICON_HEIGHT, 1);
-  display.setTextSize(2);
-  display.setCursor(20,0);
-  display.print(F("RUN SYNC"));
+  //display.drawBitmap(0, 0, icon_run, ICON_WIDTH, ICON_HEIGHT, 1);
+  //display.setTextSize(2);
+  //display.setCursor(20,0);
+  //display.print(F("RUN SYNC"));
   // instructions
   display.setTextSize(1);
   display.setCursor(0,25);
@@ -572,8 +578,43 @@ void displaySync() {
   display.setCursor(0,50);
   display.print(F("MARK:"));
   displayUpdateSyncState();
+  displayUpdateIcons();
   // update
   setFlag(FLAG_DISPLAYCHANGE);
+}
+
+void displayUpdateIcons() {
+  display.drawRect(0,0,display.width(),ICON_HEIGHT,SSD1306_BLACK);
+  if (isFlag(FLAG_RUN_OK)) {
+    display.drawBitmap(0,0,icon_run,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+  } else {
+    display.drawBitmap(0,0,icon_norun,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+  }
+  if (isFlag(FLAG_GPS_HASTIME)) {
+    display.drawBitmap(16,0,icon_clock,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+  } else {
+    display.drawBitmap(16,0,icon_notime,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+  }
+  if (isFlag(FLAG_GPS_HASFIX)) {
+    display.drawBitmap(32,0,icon_signal,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+  } else {
+    display.drawBitmap(32,0,icon_nosignal,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+  }
+  if (isFlag(FLAG_TIME_SYNCED)) {
+    display.drawBitmap(48,0,icon_sync,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+  } else {
+    display.drawBitmap(48,0,icon_nosync,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+  } 
+  if (isFlag(FLAG_TIME_DRIFT)) {
+    display.drawBitmap(64,0,icon_driftbad,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+  } else {
+    display.drawBitmap(64,0,icon_driftok,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+  } 
+  if (isFlag(FLAG_TIME_ERROR)) {
+    display.drawBitmap(80,0,icon_zerobad,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+  } else {
+    display.drawBitmap(80,0,icon_zerook,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+  } 
 }
 
 void formatTimeHHMMSS(char* buf, uint8_t h, uint8_t m, uint8_t s) {
@@ -621,6 +662,7 @@ void processGPS() {
               setFlag(FLAG_GPS_HASTIME);
               if ((isFlag(FLAG_TIME_SYNCED)) && (s==0) && (h%10==0)) { // in sync, and it's a 10-minute line
                 drifthistory_append(drift_current); // append last measured drift history
+                displayUpdateDriftChart();
               }
               displayUpdateTime();
             } else {
