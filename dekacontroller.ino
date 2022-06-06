@@ -614,7 +614,8 @@ void displayUpdateIcons() {
     display.drawBitmap(80,0,icon_zerobad,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
   } else {
     display.drawBitmap(80,0,icon_zerook,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-  } 
+  }
+  setFlag(FLAG_DISPLAYCHANGE); 
 }
 
 void formatTimeHHMMSS(char* buf, uint8_t h, uint8_t m, uint8_t s) {
@@ -700,8 +701,9 @@ void loop() {
         eeprom_update_word(&tzoffset_ee, tzoffset_minutes);
       }
     }
-    // update LED status (every 320ms approx)
+    // update LED status and icons (every 320ms approx)
     if (subdiv%64==0) {
+      displayUpdateIcons();
       if ((!isFlag(FLAG_GPS_HASTIME)) || (!isFlag(FLAG_RUN_OK)) || (!isFlag(FLAG_TIME_SYNCED))) {
         // error
         pixels.setPixelColor(0, pixels.Color(255,0,0));
