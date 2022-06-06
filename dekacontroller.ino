@@ -87,25 +87,26 @@ Adafruit_NeoPixel pixels(NUM_LEDS, PIN_LEDA, NEO_GRB+NEO_KHZ800);
 #define PIN_RUN_OUT 16
 
 // state variables
-#define FLAG_RUN_OK 0x01
-#define FLAG_GPS_HASTIME 0x02
-#define FLAG_GPS_HASFIX 0x04
-#define FLAG_GPS_OLDFIX 0x08
-#define FLAG_TIME_SYNCED 0x10
-#define FLAG_TIME_DRIFT 0x20
-#define FLAG_DISPLAYCHANGE 0x40
+#define FLAG_RUN_OK 0
+#define FLAG_GPS_HASTIME 1
+#define FLAG_GPS_HASFIX 2
+#define FLAG_GPS_OLDFIX 3
+#define FLAG_TIME_SYNCED 4
+#define FLAG_TIME_DRIFT 5
+#define FLAG_DISPLAYCHANGE 6
+#define FLAG_RESERVED 7
 volatile uint8_t flags = 0x00;
 
 inline void setFlag(uint8_t flag) {
-  flags |= flag;
+  flags |= (1<<flag);
 }
 
 inline void clearFlag(uint8_t flag) {
-  flags &= ~(flag);
+  flags &= ~(1<<flag);
 }
 
 inline bool isFlag(uint8_t flag) {
-  return (bool)(flags & flag);
+  return (bool)(flags & (1<<flag));
 }
 
 // display modes
