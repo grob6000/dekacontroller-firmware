@@ -140,9 +140,9 @@ const char syncstring7[] PROGMEM = "Error";
 const char* const syncstrings[] PROGMEM = {syncstring0, syncstring1, syncstring2, syncstring3, syncstring4, syncstring5, syncstring6, syncstring7};
 
 // sync parameters
-#define SYNC_DURATION 2 // minutes
 #define SYNC_PULSETICKS 5 // x10ms
-#define SYNC_PULSEPERIOD 30 // x10ms
+#define SYNC_PULSEFREQ 4 // Hz
+#define SYNC_PULSEPERIOD (100/SYNC_PULSEFREQ) // x10ms
 #define SYNC_RUNTIMEOUT 50 // x100ms
 #define SYNC_MAXZERO_M 10 // max presses to zero M0
 #define SYNC_MAXZERO_H 24 // max presses to zero H0 + H00
@@ -695,7 +695,7 @@ void loop() {
       switch (syncstate) {
         case SYNC_BEGIN:
           // initialise parameters, pick a mark time, stop running, etc.
-          marktime = hour_local * 60 + minute_local + SYNC_DURATION;
+          marktime = hour_local * 60 + minute_local + 2; // worst case - update after zeroing
           marktime %= MINUTESPERDAY;
           if (digitalRead(PIN_RUN_IN)) { // high = grounded (running)
             timeoutcount++; // started at zero in begin() routine
@@ -746,7 +746,12 @@ void loop() {
             }
           } else {
             // both H0 and H00 are zero
-            uint8_t timetoset = marktime/60 + marktime%60;
+            uint8_t timetoset = (marktime/60 + marktime%60) / SYNC_PULSEFREQ + 1; // worst case 21 seconds
+            marktime = hour_local*60 + minute_local;
+            if (second_local < 60-timetoset) { // will make it before next minute change
+              marktime += 1; // next minute
+            } else
+              marktime += 2; // the one after
             advcount = marktime / 60; // number of presses = hour
             syncstate = SYNC_SET_H; // continue on next tick
             displayUpdateSyncState();
