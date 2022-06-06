@@ -87,14 +87,14 @@ Adafruit_NeoPixel pixels(NUM_LEDS, PIN_LEDA, NEO_GRB+NEO_KHZ800);
 #define PIN_RUN_OUT 16
 
 // state variables
-#define FLAG_RUN_OK 0
-#define FLAG_GPS_HASTIME 1
-#define FLAG_GPS_HASFIX 2
-#define FLAG_GPS_OLDFIX 3
-#define FLAG_TIME_SYNCED 4
-#define FLAG_TIME_DRIFT 5
-#define FLAG_DISPLAYCHANGE 6
-#define FLAG_RESERVED 7
+#define FLAG_RUN_OK 0 // set when i know i can control run output
+#define FLAG_GPS_HASTIME 1 // set when last gps message included time
+#define FLAG_GPS_HASFIX 2 // set when last gps message included fix
+#define FLAG_GPS_OLDFIX 3 // set when a gps message since boot included fix
+#define FLAG_TIME_SYNCED 4 // set when sync routine was completed since boot
+#define FLAG_TIME_DRIFT 5 // set when measured drift of clock exceeds threshold
+#define FLAG_TIME_ERROR 6  // set when inputs are inconsistent with tracked time
+#define FLAG_DISPLAYCHANGE 7 // set when there are changes in the display buffer
 volatile uint8_t flags = 0x00;
 
 inline void setFlag(uint8_t flag) {
@@ -398,7 +398,22 @@ void m0low() {
     timetracked %= MINUTESPERDAY; // around the clock
     bool checkok = true;
     // TO-DO check zero signals
+    if (!digitalRead(PIN_M00) != !((timetracked / 10) % 6)) {
+      checkok = false;
+    }
+    if (!digitalRead(PIN_H0) != !((timetracked / 60) % 10)) {
+      checkok = false;
+    }
+    if (!digitalRead(PIN_H00) != !(timetracked / 600)) {
+      checkok = false;
+    }        
+    if (checkok) {
+      clearFlag(FLAG_TIME_ERROR);
+    } else {
+      setFlag(FLAG_TIME_ERROR);
+    }
     drift_current = timetracked - (hour_local*60 + minute_local); // update live drift (pushed into array by GPS clock)
+
   }
 }
 
