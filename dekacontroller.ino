@@ -154,13 +154,15 @@ volatile uint8_t advcount = 0;
 volatile uint8_t timeoutcount = 0;
 
 // time
-#define MINUTESPERDAY 1440
+#define MINUTESPERDAY (60*24)
+#define SECONDSPERDAY (60*60*24)
 #define TZ_INC 15 // minutes
 volatile uint8_t hour_local = 0; //local
 volatile uint8_t minute_local = 0; //local
 volatile uint8_t second_local = 0;
 volatile int16_t tzoffset_minutes = 0;
 int16_t EEMEM tzoffset_ee = 0;
+volatile uint16_t timetracked = 0; // what we believe the clock to read, minutes from midnight
 
 void setLocalTime(uint8_t hour_utc, uint8_t minute_utc, uint8_t second_utc) {
   int16_t hm = hour_utc*60 + minute_utc;
@@ -388,10 +390,14 @@ void button3() {
 }
 
 void m0low() {
+  if ((syncstate == SYNC_IDLE) && (isFlag(FLAG_TIME_SYNCED))) {
+    // should be running in sync
+    timetracked += 10; // add ten minutes
+    timetracked %= MINUTESPERDAY; // around the clock
+    bool checkok = true;
+    // TO-DO check zero signals
   }
 }
-
-
 
 void tz_increase() {
   tzoffset_minutes += TZ_INC;
@@ -739,6 +745,7 @@ void loop() {
             }
           } else {
             // both H0 and H00 are zero
+            uint8_t timetoset = marktime/60 + marktime%60;
             advcount = marktime / 60; // number of presses = hour
             syncstate = SYNC_SET_H; // continue on next tick
             displayUpdateSyncState();
@@ -771,6 +778,7 @@ void loop() {
         case SYNC_WAITMARK:
           if ((hour_local*60 + minute_local) == (marktime)) {
             digitalWrite(PIN_RUN_OUT, 1); // high = run
+            setFlag(FLAG_TIME_SYNCED);
             syncstate = SYNC_IDLE;
             displayUpdateSyncState();
           }
