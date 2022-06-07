@@ -184,12 +184,13 @@ void setLocalTime(uint8_t hour_utc, uint8_t minute_utc, uint8_t second_utc) {
 // drift
 //int16_t drift = 0; // last recorded drift, in seconds
 #define DRIFT_HISTORY_LENGTH 144 // 10 min interval for 24h
+#define DRIFT_THRESHOLD 30 // seconds before drift warning
 int16_t drift_history[DRIFT_HISTORY_LENGTH] = {0};
 uint8_t drift_history_index = 0; // index for drift history (circular buffer)
 volatile int16_t drift_current = 0; // value to be updated live
 
 int16_t drifthistory_getat(uint8_t i) {
-  return drift_history[(drift_history_index-i)%DRIFT_HISTORY_LENGTH];
+  return drift_history[(DRIFT_HISTORY_LENGTH+drift_history_index-i)%DRIFT_HISTORY_LENGTH];
 }
 
 int16_t drifthistory_getlast() {
@@ -429,8 +430,13 @@ void m0low() {
     } else {
       setFlag(FLAG_TIME_ERROR);
     }
-    drift_current = timetracked - (hour_local*60 + minute_local); // update live drift (pushed into array by GPS clock)
-
+    drift_current = (timetracked - (hour_local*60 + minute_local))*60 - second_local; // update live drift (pushed into array by GPS clock)
+    if (abs(drift_current) > DRIFT_THRESHOLD) {
+      setFlag(FLAG_TIME_DRIFT);
+    } else {
+      clearFlag(FLAG_TIME_DRIFT);
+    }
+    displayUpdateDriftChart();
   }
 }
 
@@ -559,10 +565,14 @@ void displayDrift() {
   }
   displayUpdateIcons();
   // print the offset over the top
-  display.setCursor(80,16);
+  display.setCursor(96,16);
   display.print(drifthistory_getlast());
-  display.setCursor(80,26);
+  display.setCursor(96,26);
   display.print(drift_current);
+  display.setCursor(80,46);
+  char s[] = "00:00";
+  formatTimeHHMM(s, timetracked/60, timetracked%60);
+  display.print(s);
   // update
   setFlag(FLAG_DISPLAYCHANGE);
 }
@@ -898,7 +908,7 @@ void loop() {
         case SYNC_WAITMARK:
           if ((hour_local*60 + minute_local) == (marktime)) {
             digitalWrite(PIN_RUN_OUT, 1); // high = run
-            timetracked = marktime; // init tracking time to mark time
+            timetracked = (marktime/10)*10; // init tracking time to the 10 mins before mark time
             setFlag(FLAG_TIME_SYNCED);
             syncstate = SYNC_IDLE;
             displayUpdateSyncState();
