@@ -74,6 +74,7 @@ volatile uint8_t serialbufferindex = 0;
 #define NUM_LEDS 1
 Adafruit_NeoPixel pixels(NUM_LEDS, PIN_LEDA, NEO_GRB+NEO_KHZ800);
 volatile uint8_t flashsetting = 0;
+volatile uint32_t lampcolor = pixels.Color(0,0,0);
 volatile uint8_t flashticker = 0;
 volatile uint8_t subdiv = 0;
 volatile bool flashon = false;
@@ -672,6 +673,7 @@ void processGPS() {
     //GPRMC
     uint8_t i0 = 0;
     uint8_t p = 0;
+
     for (uint8_t i = 0; i < serialbufferindex; i++) {
       if (serialbuffer[i] == ',') {
         switch (p) {
@@ -707,6 +709,15 @@ void processGPS() {
   }
 }
 
+void setLamp(uint32_t newcolor, uint8_t newflashsetting) {
+    if ((newflashsetting == 0) && ((newcolor != lampcolor) || (flashsetting != 0))) { // change, and new color is constant
+      pixels.setPixelColor(0,newcolor);
+      pixels.show();
+    }
+    lampcolor = newcolor;
+    flashsetting = newflashsetting;
+}
+
 void loop() {
   delay(10); // ticker 10ms
   subdiv++;
@@ -721,17 +732,20 @@ void loop() {
     // update LED status and icons (every 320ms approx)
     if (subdiv%64==0) {
       displayUpdateIcons();
-      if ((!isFlag(FLAG_GPS_HASTIME)) || (!isFlag(FLAG_RUN_OK)) || (!isFlag(FLAG_TIME_SYNCED))) {
+      if (syncstate != SYNC_IDLE) {
+        // sync is running
+        setLamp(pixels.Color(0,0,255), 30); // blue flash
+      } else if ((!isFlag(FLAG_GPS_HASTIME)) || (!isFlag(FLAG_RUN_OK)) || (!isFlag(FLAG_TIME_SYNCED))) {
         // error
-        pixels.setPixelColor(0, pixels.Color(255,0,0));
+        setLamp(pixels.Color(255,0,0), 30); // red, quick flash
       } else if ((!isFlag(FLAG_GPS_HASFIX)) || isFlag(FLAG_TIME_DRIFT)) {
         // warning
-        pixels.setPixelColor(0, pixels.Color(128,128,0));
+        setLamp(pixels.Color(128,128,0), 60); // orange, slow flash
       } else {
         // ok
-        pixels.setPixelColor(0, pixels.Color(0,255,0));
+        setLamp(pixels.Color(0,255,0), 0); // green, steady
       }
-      pixels.show();
+      //pixels.show();
     }
     if (subdiv==0) { // approx 2.5 second intervals
       // check run state from time to time
@@ -749,10 +763,10 @@ void loop() {
     if (flashticker == 0) {
       flashon = !flashon;
       if (flashon) {
-        pixels.setBrightness(255);
+        pixels.setPixelColor(0,lampcolor);
         pixels.show();
       } else {
-        pixels.setBrightness(0);
+        pixels.setPixelColor(0,0); // off
         pixels.show();
       }
       flashticker = flashsetting;
