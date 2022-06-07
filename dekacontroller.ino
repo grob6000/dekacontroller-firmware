@@ -73,8 +73,10 @@ volatile uint8_t serialbufferindex = 0;
 #define PIN_LEDA 17
 #define NUM_LEDS 1
 Adafruit_NeoPixel pixels(NUM_LEDS, PIN_LEDA, NEO_GRB+NEO_KHZ800);
-//volatile uint8_t flashsetting = 0;
-//volatile uint8_t flashticker = 0;
+volatile uint8_t flashsetting = 0;
+volatile uint8_t flashticker = 0;
+volatile uint8_t subdiv = 0;
+volatile bool flashon = false;
 
 // zero state inputs
 #define PIN_M0 2
@@ -95,6 +97,7 @@ Adafruit_NeoPixel pixels(NUM_LEDS, PIN_LEDA, NEO_GRB+NEO_KHZ800);
 #define FLAG_TIME_DRIFT 5 // set when measured drift of clock exceeds threshold
 #define FLAG_TIME_ERROR 6  // set when inputs are inconsistent with tracked time
 #define FLAG_DISPLAYCHANGE 7 // set when there are changes in the display buffer
+
 volatile uint8_t flags = 0x00;
 
 inline void setFlag(uint8_t flag) {
@@ -278,6 +281,19 @@ void setup() {
   pixels.show();
   delay(500);
 
+  // check run output
+  if (digitalRead(PIN_RUN_IN)) {
+    clearFlag(FLAG_RUN_OK);
+  } else {
+    digitalWrite(PIN_RUN_OUT, 1); // run
+    delay(100);
+    if (digitalRead(PIN_RUN_IN)) {
+      setFlag(FLAG_RUN_OK);
+    } else {
+      clearFlag(FLAG_RUN_OK);
+    }
+    digitalWrite(PIN_RUN_OUT, 0); // run off
+  }
 
   displaymode = MODE_TIME;
   displayTimes(); 
@@ -686,10 +702,6 @@ void processGPS() {
   }
 }
 
-
-volatile uint8_t subdiv = 0;
-//bool flashon = false;
-
 void loop() {
   delay(10); // ticker 10ms
   subdiv++;
@@ -717,22 +729,20 @@ void loop() {
       pixels.show();
     }
   }
-  /*
   if (flashsetting > 0) {
     if (flashticker == 0) {
       flashon = !flashon;
       if (flashon) {
-        FastLED.setBrightness(255);
-        FastLED.show();
+        pixels.setBrightness(255);
+        pixels.show();
       } else {
-        FastLED.setBrightness(0);
-        FastLED.show();
+        pixels.setBrightness(0);
+        pixels.show();
       }
       flashticker = flashsetting;
     }
     flashticker--;
   }
-  */
   // button debouncing
   for (uint8_t i = 0; i < BUTTONCOUNT+1; i++) {
     if ((ticker_debounce[i]) > 0) {
