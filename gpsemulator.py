@@ -10,7 +10,13 @@ if __name__ == "__main__":
     portname = sys.argv[1]
   ser = None
   try:
-    ser = serial.Serial(port=portname,baudrate=9600)
+    ser = serial.Serial()
+    ser.baudrate = 9600
+    ser.port=portname
+    ser.rts=0 # don't reset
+    ser.dtr=0 # don't reset
+    print(ser)
+    ser.open()
   except:
     print("Serial port problem, aborting")
     quit()
@@ -20,19 +26,24 @@ if __name__ == "__main__":
   validity = "A"
   dotime = True
   locstring = "3351.908,S,15112.594,E,0.00,000.00"
-
+  offset = 0 #seconds
   if len(sys.argv)>2:
     for v in sys.argv[2:]:
       if v.lower() == "notime":
         dotime = False
+        print("Run without fix")
       elif v.lower() == "nofix":
         #dotime = False
         validity = "V"
         locstring = ",,,,,"
+        print("Run without time")
+      elif v.lower().startswith("offset="):
+        offset=int(v.split("=",2)[1])
+        print("Run with offset = {0} seconds".format(offset))
   try:
     lastsecond = -1
     while True:
-      t = datetime.datetime.utcnow()
+      t = datetime.datetime.utcnow() + datetime.timedelta(seconds=offset)
       if (t.second != lastsecond):
         #print("Sending time: " + str(datetime.datetime.now()))
         lastsecond = t.second
