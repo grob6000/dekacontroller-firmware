@@ -51,7 +51,7 @@ if __name__ == "__main__":
         if dotime:
           body = "GPRMC,{0:02d}{1:02d}{2:02d}.000,{3},{4},{5:02d}{6:02d}{7:02d},,".format(t.hour,t.minute,t.second,validity,locstring,t.day,t.month,t.year%100)
         else:
-          body = "GPRMS,,{0},{1},,,".format(validity,locstring)
+          body = "GPRMC,,{0},{1},,,".format(validity,locstring)
         csum = 0
         for c in bytearray(body, "ASCII"):
           csum = xor(csum, c)
