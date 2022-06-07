@@ -749,7 +749,9 @@ void loop() {
     }
     if (subdiv==0) { // approx 2.5 second intervals
       // check run state from time to time
-      if (digitalRead(PIN_RUN_OUT)!=digitalRead(PIN_RUN_IN)) { // out=high=pull run voltage down (i.e. active), in=high=run voltage low (i.e. active)
+      if (digitalRead(PIN_RUN_OUT) == digitalRead(PIN_RUN_IN)) { // out=high=pull run voltage down (i.e. active), in=high=run voltage low (i.e. active)
+        setFlag(FLAG_RUN_OK); // if reading is what we want, no reason to report error!
+      } else {
         // not consistent
         clearFlag(FLAG_RUN_OK);
       }
