@@ -554,9 +554,14 @@ void displayDrift() {
   display.print(fullscale/2);
   // data
   for (uint8_t i = 0; i < DRIFT_HISTORY_LENGTH; i++) {
-    display.drawPixel(GRAPH_X0+(i*GRAPH_WIDTH)/DRIFT_HISTORY_LENGTH,GRAPH_Y0+drifthistory_getat(i)*GRAPH_HEIGHT/fullscale,SSD1306_WHITE);
+    display.drawPixel(GRAPH_X0+(i*GRAPH_WIDTH)/DRIFT_HISTORY_LENGTH,GRAPH_Y0-drifthistory_getat(DRIFT_HISTORY_LENGTH-i-1)*GRAPH_HEIGHT/fullscale,SSD1306_WHITE);
   }
   displayUpdateIcons();
+  // print the offset over the top
+  display.setCursor(80,16);
+  display.print(drifthistory_getlast());
+  display.setCursor(80,26);
+  display.print(drift_current);
   // update
   setFlag(FLAG_DISPLAYCHANGE);
 }
@@ -600,7 +605,7 @@ void displaySync() {
 }
 
 void displayUpdateIcons() {
-  display.drawRect(0,0,display.width(),ICON_HEIGHT,SSD1306_BLACK);
+  display.fillRect(0,0,display.width(),ICON_HEIGHT,SSD1306_BLACK);
   if (isFlag(FLAG_RUN_OK)) {
     display.drawBitmap(0,0,icon_run,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
   } else {
@@ -677,7 +682,7 @@ void processGPS() {
               uint8_t s = (serialbuffer[i0+5]-'0')*10 + (serialbuffer[i0+6]-'0');
               setLocalTime(h,m,s);
               setFlag(FLAG_GPS_HASTIME);
-              if ((isFlag(FLAG_TIME_SYNCED)) && (s==0) && (h%10==0)) { // in sync, and it's a 10-minute line
+              if ((isFlag(FLAG_TIME_SYNCED)) && (s==0) && (m%10==0)) { // in sync, and it's a 10-minute line
                 drifthistory_append(drift_current); // append last measured drift history
                 displayUpdateDriftChart();
               }
@@ -728,6 +733,17 @@ void loop() {
       }
       pixels.show();
     }
+    if (subdiv==0) { // approx 2.5 second intervals
+      // check run state from time to time
+      if (digitalRead(PIN_RUN_OUT)!=digitalRead(PIN_RUN_IN)) { // out=high=pull run voltage down (i.e. active), in=high=run voltage low (i.e. active)
+        // not consistent
+        clearFlag(FLAG_RUN_OK);
+      }
+      // auto sync if conditions right and no sync currently
+      if ((syncstate == SYNC_IDLE) && (!isFlag(FLAG_TIME_SYNCED)) && isFlag(FLAG_GPS_HASTIME) && isFlag(FLAG_GPS_HASFIX) && isFlag(FLAG_RUN_OK)) {
+        syncBegin();
+      }
+    }
   }
   if (flashsetting > 0) {
     if (flashticker == 0) {
@@ -769,21 +785,29 @@ void loop() {
       switch (syncstate) {
         case SYNC_BEGIN:
           // initialise parameters, pick a mark time, stop running, etc.
-          marktime = hour_local * 60 + minute_local + 2; // worst case - update after zeroing
-          marktime %= MINUTESPERDAY;
-          if (digitalRead(PIN_RUN_IN)) { // high = grounded (running)
-            timeoutcount++; // started at zero in begin() routine
-            digitalWrite(PIN_RUN_OUT, 0); // not run
-            if (timeoutcount > SYNC_RUNTIMEOUT) {
-              syncstate = SYNC_ERROR;
+          if (isFlag(FLAG_GPS_HASTIME) && isFlag(FLAG_GPS_OLDFIX)) {
+            marktime = hour_local * 60 + minute_local + 2; // worst case - update after zeroing
+            marktime %= MINUTESPERDAY;
+            if (digitalRead(PIN_RUN_IN)) { // high = grounded (running)
+              timeoutcount++; // started at zero in begin() routine
+              digitalWrite(PIN_RUN_OUT, 0); // not run
+              if (timeoutcount > SYNC_RUNTIMEOUT) {
+                syncstate = SYNC_ERROR;
+                clearFlag(FLAG_RUN_OK);
+                displayUpdateSyncState();
+              }
+              ticker_sync = 10; // 100ms until resample
+            } else {
+              // low = voltage on reset line (not running); proceed
+              setFlag(FLAG_RUN_OK);
+              syncstate = SYNC_ZERO_M0;
               displayUpdateSyncState();
+              timeoutcount = 0; // reset for use as zero limiter
             }
-            ticker_sync = 10; // 100ms until resample
           } else {
-            // low = voltage on reset line (not running); proceed
-            syncstate = SYNC_ZERO_M0;
+            // gps time is no good; go to error rather than start the sync
+            syncstate = SYNC_ERROR;
             displayUpdateSyncState();
-            timeoutcount = 0; // reset for use as zero limiter
           }
           break;
         case SYNC_ZERO_M0:
