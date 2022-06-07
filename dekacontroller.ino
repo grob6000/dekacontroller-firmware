@@ -697,7 +697,7 @@ void processGPS() {
             if (serialbuffer[i0+1] == 'A') {
               setFlag(FLAG_GPS_HASFIX);
               setFlag(FLAG_GPS_OLDFIX);
-            } else if (serialbuffer[i+1] == 'V') {
+            } else {
               clearFlag(FLAG_GPS_HASFIX);
             }
             break;
