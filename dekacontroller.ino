@@ -10,14 +10,8 @@
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
-
-// Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
-// The pins for I2C are defined by the Wire-library. 
-// On an arduino UNO:       A4(SDA), A5(SCL)
-// On an arduino MEGA 2560: 20(SDA), 21(SCL)
-// On an arduino LEONARDO:   2(SDA),  3(SCL), ...
-#define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
-#define SCREEN_ADDRESS 0x3C ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
+#define OLED_RESET -1 // no reset
+#define SCREEN_ADDRESS 0x3C
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define DATAX 45
 #define TIME_DATAX DATAX
@@ -29,7 +23,26 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define ICON_HEIGHT   16
 #define ICON_WIDTH    16
 
-//#include "icons.h"
+// card dimensions
+#define CARD_WIDTH 40
+#define CARD_WIDTH_DOUBLE ((CARD_WIDTH*2)+CARD_MARGIN)
+#define CARD_HEIGHT 21
+#define CARD_MARGIN 2
+#define CARD_X0_0 CARD_MARGIN
+#define CARD_X0_1 ((CARD_MARGIN*2)+CARD_WIDTH)
+#define CARD_X0_2 ((CARD_MARGIN*3)+(CARD_WIDTH*2))
+#define CARD_Y0_0 (16+CARD_MARGIN)
+#define CARD_Y0_1 (16+(CARD_MARGIN*2)+CARD_HEIGHT)
+
+// specific cards
+#define GPS_CARD_X0 CARD_X0_0
+#define GPS_CARD_Y0 CARD_Y0_0
+#define SYNC_CARD_X0 CARD_X0_0
+#define SYNC_CARD_Y0 CARD_Y0_1
+#define RUN_CARD_X0 CARD_X0_1
+#define RUN_CARD_Y0 CARD_Y0_0
+#define DRIFT_CARD_X0 CARD_X0_1
+#define DRIFT_CARD_Y0 CARD_Y0_1
 
 // ticker definition
 #define TICKRATE 25 // ms
@@ -102,10 +115,9 @@ volatile bool flashon = false;
 #define FLAG_GPS_HASTIME 1 // set when last gps message included time
 #define FLAG_GPS_HASFIX 2 // set when last gps message included fix
 #define FLAG_GPS_OLDFIX 3 // set when a gps message since boot included fix
-//#define FLAG_TIME_SYNCED 4 // set when sync routine was completed since boot
-#define FLAG_TIME_DRIFT 5 // set when measured drift of clock exceeds threshold
-#define FLAG_TIME_ERROR 6  // set when inputs are inconsistent with tracked time
-#define FLAG_DISPLAYCHANGE 7 // set when there are changes in the display buffer
+#define FLAG_TIME_DRIFT 4 // set when measured drift of clock exceeds threshold
+#define FLAG_TIME_ERROR 5  // set when inputs are inconsistent with tracked time
+#define FLAG_DISPLAYCHANGE 6 // set when there are changes in the display buffer
 
 volatile uint8_t flags = 0x00;
 
@@ -195,9 +207,9 @@ void setLocalTime(uint8_t hour_utc, uint8_t minute_utc, uint8_t second_utc) {
 }
 
 // drift
-//int16_t drift = 0; // last recorded drift, in seconds
 #define DRIFT_HISTORY_LENGTH 144 // 10 min interval for 24h
-#define DRIFT_THRESHOLD 30 // seconds before drift warning
+#define DRIFT_THRESHOLD_WARNING 30 // seconds before drift warning (30 secs)
+#define DRIFT_THRESHOLD_ERROR 1800 // seconds before deciding failed (30 mins)
 int16_t drift_history[DRIFT_HISTORY_LENGTH] = {0};
 uint8_t drift_history_index = 0; // index for drift history (circular buffer)
 volatile int16_t drift_current = 0; // value to be updated live
@@ -275,8 +287,10 @@ void setup() {
   // setup display
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
   if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-    //Serial.println(F("SSD1306 allocation failed"));
-    for(;;); // Don't proceed, loop forever
+    // set LED to red (solid) and then block
+    pixels.setPixelColor(0, pixels.Color(255,0,0));
+    pixels.show();
+    for(;;);
   }
 
   // splash
@@ -324,7 +338,6 @@ void setup() {
   PCMSK0 = 0b0000111; // PCINT 0, 1, 2
   
   // setup serial for GPS
-  //Serial.begin(9600);
   RxInit();
 
 }
@@ -384,6 +397,9 @@ void button0(void) {
       syncBegin();
       displayUpdateSync();
       break;
+    default:
+      // no action
+      break;
   }
 }
 
@@ -395,9 +411,8 @@ void button1(void) {
       displayUpdateTime();
       break;
     case MODE_SYNC:
-      // start zeroing
-      //zeroBegin();
-      //displayUpdateSync();
+    default:
+      // no action
       break;
   }
 }
@@ -407,7 +422,7 @@ void button2(void) {
   displaymode %= MODECOUNT;
   switch (displaymode) {
     case MODE_TIME:
-      displayTimes();
+      displayTimezoneEdit();
       break;
     case MODE_DRIFT:
       displayDrift();
@@ -423,6 +438,7 @@ void button2(void) {
 
 void button3() {
   // no actions for b3
+  return;
 }
 
 void m0low() {
@@ -431,7 +447,7 @@ void m0low() {
     timetracked += 10; // add ten minutes
     timetracked %= MINUTESPERDAY; // around the clock
     bool checkok = true;
-    // TO-DO check zero signals
+    // check zero signals
     if (!digitalRead(PIN_M00) != !((timetracked / 10) % 6)) {
       checkok = false;
     }
@@ -443,10 +459,12 @@ void m0low() {
     }        
     if (checkok) {
       drift_current = (timetracked - (hour_local*60 + minute_local))*60 - second_local; // update live drift (pushed into array by GPS clock)
-      if (abs(drift_current) > DRIFT_THRESHOLD) {
+      if (abs(drift_current) < DRIFT_THRESHOLD_WARNING) {
+        clearFlag(FLAG_TIME_DRIFT);
+      } else if (abs(drift_current) < DRIFT_THRESHOLD_ERROR) {
         setFlag(FLAG_TIME_DRIFT);
       } else {
-        clearFlag(FLAG_TIME_DRIFT);
+        setFlag(FLAG_TIME_ERROR);
       }
     } else {
       setFlag(FLAG_TIME_ERROR);
@@ -471,121 +489,60 @@ void tz_decrease() {
   settingchangetimeout = SETTINGCHANGETIMEOUT;
 }
 
-
-
 void displayUpdateTime() {
-  /*
-  if (displaymode == MODE_TIME) { // only if in correct mode
-    display.fillRect(TIME_DATAX, 20, SCREEN_WIDTH-TIME_DATAX,8,SSD1306_BLACK);
-    display.setCursor(TIME_DATAX,20);
-    char stime[] = " 00:00:00";
-    formatTimeHHMMSS(&stime[1], hour_local, minute_local, second_local);
-    display.print(stime);
-    display.fillRect(TIME_DATAX, 40, SCREEN_WIDTH-TIME_DATAX,8,SSD1306_BLACK);
-    display.setCursor(TIME_DATAX,40);
-    display.print(F("F="));
-    if (isFlag(FLAG_GPS_HASFIX)) {
-      display.print(F("Y"));
-    } else {
-      display.print(F("N"));
-    }
-    display.print(F(" T="));
-    if (isFlag(FLAG_GPS_HASTIME)) { 
-      display.print(F("Y"));
-    } else {
-      display.print(F("N"));
-    }
-    setFlag(FLAG_DISPLAYCHANGE);
-  } else
-  */
-  //if (displaymode == MODE_MAIN) {
-    // headline time display
-    display.fillRect(0,0,96,16,SSD1306_BLACK);
-    display.setCursor(0,0);
-    display.setTextSize(2);
-    char s[] = "00:00:00";
-    formatTimeHHMMSS(s, hour_local, minute_local, second_local);
-    display.print(s);
-    setFlag(FLAG_DISPLAYCHANGE);
-  //}
-}
-
-void displayUpdateTimezone() {
-  /*
-  if (displaymode == MODE_TIME) { // only if in correct mode
-    display.fillRect(TIME_DATAX, 30, SCREEN_WIDTH-TIME_DATAX,8,SSD1306_BLACK);
-    display.setCursor(TIME_DATAX,30);
-    if (tzoffset_minutes >= 0) {
-      display.print(F("+"));
-    } else {
-      display.print(F("-"));
-    }
-    char s[] = "00:00";
-    formatTimeHHMM(s, abs(tzoffset_minutes)/60, abs(tzoffset_minutes)%60);
-    display.print(s);
-    setFlag(FLAG_DISPLAYCHANGE);
-  } else
-  */
- if (displaymode == MODE_TIME) {
-  display.fillRect(0,40,SCREEN_WIDTH,SCREEN_HEIGHT-40,SSD1306_BLACK);
+  // update big time in header row (all screens)
+  display.fillRect(0,0,96,16,SSD1306_BLACK);
+  display.setCursor(0,0);
   display.setTextSize(2);
-  display.setCursor(28,40);
-  if (tzoffset_minutes >= 0) {
-      display.print(F("+"));
-    } else {
-      display.print(F("-"));
-    }
-  char s[] = "00:00";
-  formatTimeHHMM(s, abs(tzoffset_minutes)/60, abs(tzoffset_minutes)%60);
+  char s[] = "00:00:00";
+  formatTimeHHMMSS(s, hour_local, minute_local, second_local);
   display.print(s);
- }
- //if (displaymode == MODE_MAIN) {
-    // headline timezone display
-    display.fillRect(96,0,SCREEN_WIDTH-96,16,SSD1306_BLACK);
-    display.setCursor(100,0);
-    display.setTextSize(1);
-    if (tzoffset_minutes >= 0) {
-      display.print(F("UTC+"));
-    } else {
-      display.print(F("UTC-"));
-    }
-    char s[] = "00:00";
-    formatTimeHHMM(s, abs(tzoffset_minutes)/60, abs(tzoffset_minutes)%60);
-    display.setCursor(97,8);
-    display.print(s);
-    setFlag(FLAG_DISPLAYCHANGE);
-  //}
-}
-
-void displayTimes() {
-
-  display.clearDisplay();
-  // top line
-  //display.drawBitmap(0, 0, icon_clock, ICON_WIDTH, ICON_HEIGHT, 1);
-  //display.setTextSize(2);  
-  //display.setCursor(20,0);
-  //display.print(F("TIME"));
-  // local time
-  //display.setTextSize(1);
-  //display.setCursor(0,20);
-  //display.print(F("TIME:"));
-  // offset
-  display.setCursor(4,25);
-  display.print(F("UP/DN TO SET OFFSET:"));
-  // gps status
-  //display.setCursor(0,40);
-  //display.print(F("GPS:"));
-  // update
-  displayUpdateTime();
-  displayUpdateTimezone();
-  //displayUpdateIcons();
   setFlag(FLAG_DISPLAYCHANGE);
 }
 
-#define GPS_CARD_X0 2
-#define GPS_CARD_Y0 18
-#define CARD_WIDTH 40
-#define CARD_HEIGHT 21
+void displayUpdateTimezone() {
+ 
+  if (displaymode == MODE_TIME) {
+    // update big timezone
+    display.fillRect(0,40,SCREEN_WIDTH,SCREEN_HEIGHT-40,SSD1306_BLACK);
+    display.setTextSize(2);
+    display.setCursor(28,40);
+    if (tzoffset_minutes >= 0) {
+        display.print(F("+"));
+      } else {
+        display.print(F("-"));
+      }
+    char s[] = "00:00";
+    formatTimeHHMM(s, abs(tzoffset_minutes)/60, abs(tzoffset_minutes)%60);
+    display.print(s);
+  }
+  // headline timezone display (all screens)
+  display.fillRect(96,0,SCREEN_WIDTH-96,16,SSD1306_BLACK);
+  display.setCursor(100,0);
+  display.setTextSize(1);
+  if (tzoffset_minutes >= 0) {
+    display.print(F("UTC+"));
+  } else {
+    display.print(F("UTC-"));
+  }
+  char s[] = "00:00";
+  formatTimeHHMM(s, abs(tzoffset_minutes)/60, abs(tzoffset_minutes)%60);
+  display.setCursor(97,8);
+  display.print(s);
+  setFlag(FLAG_DISPLAYCHANGE);
+}
+
+void displayTimezoneEdit() {
+  // update timezone editor display
+  display.clearDisplay();
+  display.setCursor(4,25);
+  display.print(F("UP/DN TO SET OFFSET:"));
+  displayUpdateTime();
+  displayUpdateTimezone();
+  setFlag(FLAG_DISPLAYCHANGE);
+}
+
+
 void displayUpdateGPS() {
   if (displaymode == MODE_MAIN) {
     // gps card
@@ -614,8 +571,6 @@ void displayUpdateGPS() {
   }
 }
 
-#define RUN_CARD_X0 45
-#define RUN_CARD_Y0 18
 void displayUpdateRun() {
   if (displaymode == MODE_MAIN) {
     // gps card
@@ -646,8 +601,7 @@ void displayMain() {
   displayUpdateDrift(); // draw drift card
 }
 
-#define DRIFT_CARD_X0 45
-#define DRIFT_CARD_Y0 41
+
 void displayUpdateDrift() {
   if (displaymode == MODE_DRIFT) {
     displayDrift(); // just do the whole schebang
@@ -678,15 +632,9 @@ void displayUpdateDrift() {
 
 void displayDrift() {
   display.clearDisplay();
-  // top line
-  //display.drawBitmap(0, 0, icon_drift, ICON_WIDTH, ICON_HEIGHT, 1);
-  //display.setTextSize(2);
-  //display.setCursor(20,0);
-  //display.print(F("DRIFT"));
   // determine scale
   int16_t fullscale = (drifthistory_getmaxmagnitude()/20 + 1)*20;
   // graph
-  //display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0,GRAPH_WIDTH,SSD1306_WHITE); // horizontal axis
   display.drawFastVLine(GRAPH_X0, GRAPH_Y0-GRAPH_HEIGHT-2,GRAPH_Y0+GRAPH_HEIGHT+2,SSD1306_WHITE); // vertical axis
   display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0-GRAPH_HEIGHT,2,SSD1306_WHITE); // top tick
   display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0+GRAPH_HEIGHT,2,SSD1306_WHITE); // bottom tick
@@ -709,38 +657,22 @@ void displayDrift() {
   for (uint8_t i = 0; i < DRIFT_HISTORY_LENGTH; i++) {
     display.drawPixel(GRAPH_X0+(i*GRAPH_WIDTH)/DRIFT_HISTORY_LENGTH,GRAPH_Y0-drifthistory_getat(DRIFT_HISTORY_LENGTH-i-1)*GRAPH_HEIGHT/fullscale,SSD1306_WHITE);
   }
-  //displayUpdateIcons();
-  /*
-  // print the offset over the top
-  display.setCursor(96,16);
-  int16_t dhl = drifthistory_getlast();
-  if (dhl >=- 0) {
-    display.print("+");
-  }
-  display.print(dhl);
-  display.setCursor(96,26);
-  display.print(drift_current);
-  display.setCursor(80,46);
-  char s[] = "00:00";
-  formatTimeHHMM(s, timetracked/60, timetracked%60);
-  display.print(s);
-  */
+  // update data
   displayUpdateTime();
   displayUpdateTimezone();
   // update
   setFlag(FLAG_DISPLAYCHANGE);
 }
 
-#define SYNC_CARD_X0 2
-#define SYNC_CARD_Y0 41
+
 
 void displayUpdateSync() {
   if (displaymode == MODE_SYNC) { // only update if in the correct mode
-    display.fillRect(SYNC_DATAX, 40, SCREEN_WIDTH-SYNC_DATAX,18,SSD1306_BLACK);
-    display.setCursor(SYNC_DATAX, 40);
+    display.fillRect(DATAX, 40, SCREEN_WIDTH-DATAX,18,SSD1306_BLACK);
+    display.setCursor(DATAX, 40);
     display.setTextSize(1);
     display.print((__FlashStringHelper *)pgm_read_word(&syncstrings[syncstate]));
-    display.setCursor(SYNC_DATAX, 50);
+    display.setCursor(DATAX, 50);
     if (syncstate > SYNC_ZERO_H) {
       char s[] = "00:00";
       formatTimeHHMM(s, marktime/60, marktime%60);
@@ -765,65 +697,21 @@ void displayUpdateSync() {
 
 void displaySync() {
   display.clearDisplay();
-  // top line
-  //display.drawBitmap(0, 0, icon_run, ICON_WIDTH, ICON_HEIGHT, 1);
-  //display.setTextSize(2);
-  //display.setCursor(20,0);
-  //display.print(F("RUN SYNC"));
   // instructions
   display.setTextSize(1);
   display.setCursor(16,25);
   display.print(F("PRESS UP TO SYNC"));
   display.setCursor(0,40);
+  // data
   display.print(F("STATUS:"));
   display.setCursor(0,50);
   display.print(F("MARK:"));
   displayUpdateSync();
   displayUpdateTime();
   displayUpdateTimezone();
-  //displayUpdateIcons();
   // update
   setFlag(FLAG_DISPLAYCHANGE);
 }
-
-/*
-void displayUpdateIcons() {
-  if (displaymode != MODE_MAIN) {
-    display.fillRect(0,0,SCREEN_WIDTH,ICON_HEIGHT,SSD1306_BLACK);
-    if (isFlag(FLAG_RUN_OK)) {
-      display.drawBitmap(0,0,icon_run,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-    } else {
-      display.drawBitmap(0,0,icon_norun,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-    }
-    if (isFlag(FLAG_GPS_HASTIME)) {
-      display.drawBitmap(16,0,icon_clock,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-    } else {
-      display.drawBitmap(16,0,icon_notime,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-    }
-    if (isFlag(FLAG_GPS_HASFIX)) {
-      display.drawBitmap(32,0,icon_signal,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-    } else {
-      display.drawBitmap(32,0,icon_nosignal,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-    }
-    if (isFlag(FLAG_TIME_SYNCED)) {
-      display.drawBitmap(48,0,icon_sync,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-    } else {
-      display.drawBitmap(48,0,icon_nosync,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-    } 
-    if (isFlag(FLAG_TIME_DRIFT)) {
-      display.drawBitmap(64,0,icon_driftbad,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-    } else {
-      display.drawBitmap(64,0,icon_driftok,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-    } 
-    if (isFlag(FLAG_TIME_ERROR)) {
-      display.drawBitmap(80,0,icon_zerobad,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-    } else {
-      display.drawBitmap(80,0,icon_zerook,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-    }
-    setFlag(FLAG_DISPLAYCHANGE); 
-  }
-}
-*/
 
 void formatTimeHHMMSS(char* buf, uint8_t h, uint8_t m, uint8_t s) {
   sprintf(&buf[0], "%02d", h);
@@ -924,7 +812,6 @@ void loop() {
       }
     }
     if (subdiv%TICKDIV2==0) {
-      //displayUpdateIcons();
       // update LED status
       if (syncRunning()) {
         // sync is running
