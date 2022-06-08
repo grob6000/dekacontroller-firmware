@@ -858,7 +858,7 @@ void processGPS() {
     //GPRMC
     uint8_t i0 = 0;
     uint8_t p = 0;
-
+    gpstimeout = 0;
     for (uint8_t i = 0; i < serialbufferindex; i++) {
       if (serialbuffer[i] == ',') {
         switch (p) {
@@ -936,6 +936,14 @@ void loop() {
         setLamp(pixels.Color(0,255,0), FLASHSETTING_NONE); // green, steady
       }
       //pixels.show();
+      if (gpstimeout > GPSTIMEOUT) {
+        // has been a while since last GPS message received, assume dead/reset
+        clearFlag(FLAG_GPS_HASFIX);
+        clearFlag(FLAG_GPS_HASTIME);
+        clearFlag(FLAG_GPS_OLDFIX);
+      } else {
+        gpstimeout++;
+      }
     }
     if (subdiv==0) { // max interval; 255*tickdiv (10ms: 2.5sec, 20ms: 5 sec, 25ms: 6.3 sec)
       // check run state from time to time
