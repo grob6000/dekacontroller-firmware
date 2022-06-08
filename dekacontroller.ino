@@ -941,6 +941,7 @@ void loop() {
         clearFlag(FLAG_GPS_HASFIX);
         clearFlag(FLAG_GPS_HASTIME);
         clearFlag(FLAG_GPS_OLDFIX);
+        displayUpdateGPS();
       } else {
         gpstimeout++;
       }
