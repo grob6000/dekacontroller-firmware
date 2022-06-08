@@ -24,12 +24,12 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define SYNC_DATAX DATAX
 #define GRAPH_Y0 40
 #define GRAPH_X0 20
-#define GRAPH_WIDTH 72
+#define GRAPH_WIDTH 108
 #define GRAPH_HEIGHT 20
 #define ICON_HEIGHT   16
 #define ICON_WIDTH    16
 
-#include "icons.h"
+//#include "icons.h"
 
 // ticker definition
 #define TICKRATE 25 // ms
@@ -122,11 +122,12 @@ inline bool isFlag(uint8_t flag) {
 }
 
 // display modes
-#define MODE_TIME 0
-#define MODE_DRIFT 1
-#define MODE_SYNC 2
-#define MODECOUNT 3
-volatile uint8_t displaymode = MODE_TIME;
+#define MODE_MAIN 0
+#define MODE_TIME 1
+#define MODE_DRIFT 2
+#define MODE_SYNC 3
+#define MODECOUNT 4
+volatile uint8_t displaymode = MODE_MAIN;
 #define SETTINGCHANGETIMEOUT (5000/TICKRATE/TICKDIV2) // 5 seconds
 volatile uint8_t settingchangetimeout = 0;
 
@@ -141,14 +142,14 @@ volatile uint8_t settingchangetimeout = 0;
 #define SYNC_ERROR 7
 #define SYNCCOUNT 8
 volatile uint8_t syncstate = SYNC_IDLE;
-const char syncstring0[] PROGMEM = "Idle";
-const char syncstring1[] PROGMEM = "Begin";
-const char syncstring2[] PROGMEM = "Zero Min";
-const char syncstring3[] PROGMEM = "Zero Hour";
-const char syncstring4[] PROGMEM = "Set Hour";
-const char syncstring5[] PROGMEM = "Set Min";
-const char syncstring6[] PROGMEM = "Wait Mark";
-const char syncstring7[] PROGMEM = "Error";
+const char syncstring0[] PROGMEM = " IDLE"; // space to center in 6 chars
+const char syncstring1[] PROGMEM = "BEGIN";
+const char syncstring2[] PROGMEM = "ZERO M";
+const char syncstring3[] PROGMEM = "ZERO H";
+const char syncstring4[] PROGMEM = "SET H";
+const char syncstring5[] PROGMEM = "SET M";
+const char syncstring6[] PROGMEM = " WAIT"; // space to center in 6 chars
+const char syncstring7[] PROGMEM = "ERROR";
 const char* const syncstrings[] PROGMEM = {syncstring0, syncstring1, syncstring2, syncstring3, syncstring4, syncstring5, syncstring6, syncstring7};
 
 // sync parameters
@@ -308,8 +309,8 @@ void setup() {
     digitalWrite(PIN_RUN_OUT, 0); // run off
   }
 
-  displaymode = MODE_TIME;
-  displayTimes(); 
+  displaymode = MODE_MAIN;
+  displayMain(); 
 
   // attach button interrupts
   // BUTTON0  D7  PD7  PCINT23
@@ -380,7 +381,7 @@ void button0(void) {
     case MODE_SYNC:
       // start sync
       syncBegin();
-      displayUpdateSyncState();
+      displayUpdateSync();
       break;
   }
 }
@@ -395,7 +396,7 @@ void button1(void) {
     case MODE_SYNC:
       // start zeroing
       //zeroBegin();
-      //displayUpdateSyncState();
+      //displayUpdateSync();
       break;
   }
 }
@@ -412,6 +413,9 @@ void button2(void) {
       break;
     case MODE_SYNC:
       displaySync();
+      break;
+    case MODE_MAIN:
+      displayMain();
       break;
   }
 }
@@ -447,7 +451,7 @@ void m0low() {
     } else {
       clearFlag(FLAG_TIME_DRIFT);
     }
-    displayUpdateDriftChart();
+    displayUpdateDrift();
   }
 }
 
@@ -470,6 +474,7 @@ void tz_decrease() {
 
 
 void displayUpdateTime() {
+  /*
   if (displaymode == MODE_TIME) { // only if in correct mode
     display.fillRect(TIME_DATAX, 20, SCREEN_WIDTH-TIME_DATAX,8,SSD1306_BLACK);
     display.setCursor(TIME_DATAX,20);
@@ -491,10 +496,22 @@ void displayUpdateTime() {
       display.print(F("N"));
     }
     setFlag(FLAG_DISPLAYCHANGE);
-  }
+  } else
+  */
+  //if (displaymode == MODE_MAIN) {
+    // headline time display
+    display.fillRect(0,0,96,16,SSD1306_BLACK);
+    display.setCursor(0,0);
+    display.setTextSize(2);
+    char s[] = "00:00:00";
+    formatTimeHHMMSS(s, hour_local, minute_local, second_local);
+    display.print(s);
+    setFlag(FLAG_DISPLAYCHANGE);
+  //}
 }
 
 void displayUpdateTimezone() {
+  /*
   if (displaymode == MODE_TIME) { // only if in correct mode
     display.fillRect(TIME_DATAX, 30, SCREEN_WIDTH-TIME_DATAX,8,SSD1306_BLACK);
     display.setCursor(TIME_DATAX,30);
@@ -507,7 +524,37 @@ void displayUpdateTimezone() {
     formatTimeHHMM(s, abs(tzoffset_minutes)/60, abs(tzoffset_minutes)%60);
     display.print(s);
     setFlag(FLAG_DISPLAYCHANGE);
-  }
+  } else
+  */
+ if (displaymode == MODE_TIME) {
+  display.fillRect(0,40,SCREEN_WIDTH,SCREEN_HEIGHT-40,SSD1306_BLACK);
+  display.setTextSize(2);
+  display.setCursor(28,40);
+  if (tzoffset_minutes >= 0) {
+      display.print(F("+"));
+    } else {
+      display.print(F("-"));
+    }
+  char s[] = "00:00";
+  formatTimeHHMM(s, abs(tzoffset_minutes)/60, abs(tzoffset_minutes)%60);
+  display.print(s);
+ }
+ //if (displaymode == MODE_MAIN) {
+    // headline timezone display
+    display.fillRect(96,0,SCREEN_WIDTH-96,16,SSD1306_BLACK);
+    display.setCursor(100,0);
+    display.setTextSize(1);
+    if (tzoffset_minutes >= 0) {
+      display.print(F("UTC+"));
+    } else {
+      display.print(F("UTC-"));
+    }
+    char s[] = "00:00";
+    formatTimeHHMM(s, abs(tzoffset_minutes)/60, abs(tzoffset_minutes)%60);
+    display.setCursor(97,8);
+    display.print(s);
+    setFlag(FLAG_DISPLAYCHANGE);
+  //}
 }
 
 void displayTimes() {
@@ -519,25 +566,113 @@ void displayTimes() {
   //display.setCursor(20,0);
   //display.print(F("TIME"));
   // local time
-  display.setTextSize(1);
-  display.setCursor(0,20);
-  display.print(F("TIME:"));
+  //display.setTextSize(1);
+  //display.setCursor(0,20);
+  //display.print(F("TIME:"));
   // offset
-  display.setCursor(0,30);
-  display.print(F("OFFSET:"));
+  display.setCursor(4,25);
+  display.print(F("UP/DN TO SET OFFSET:"));
   // gps status
-  display.setCursor(0,40);
-  display.print(F("GPS:"));
+  //display.setCursor(0,40);
+  //display.print(F("GPS:"));
   // update
   displayUpdateTime();
   displayUpdateTimezone();
-  displayUpdateIcons();
+  //displayUpdateIcons();
   setFlag(FLAG_DISPLAYCHANGE);
 }
 
-void displayUpdateDriftChart() {
+#define GPS_CARD_X0 2
+#define GPS_CARD_Y0 18
+#define CARD_WIDTH 40
+#define CARD_HEIGHT 21
+void displayUpdateGPS() {
+  if (displaymode == MODE_MAIN) {
+    // gps card
+    display.fillRect(GPS_CARD_X0, GPS_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_BLACK);
+    display.drawRect(GPS_CARD_X0, GPS_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(GPS_CARD_X0+11, GPS_CARD_Y0+2);
+    display.print(F("GPS"));
+    bool invert = false;
+    if (isFlag(FLAG_GPS_HASFIX)) {
+      display.setCursor(GPS_CARD_X0+2+9, GPS_CARD_Y0+11);
+      display.print(F("FIX"));
+    } else if (isFlag(FLAG_GPS_HASTIME)) {
+      display.setCursor(GPS_CARD_X0+2+6, GPS_CARD_Y0+11);
+      display.print(F("TIME"));
+      invert = true;
+    } else {
+      display.setCursor(GPS_CARD_X0+2+3, GPS_CARD_Y0+11);
+      display.print(F("ERROR"));
+      invert = true;
+    }
+    if (invert) {
+      display.fillRect(GPS_CARD_X0+1,GPS_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SSD1306_INVERSE);
+    }
+    setFlag(FLAG_DISPLAYCHANGE);
+  }
+}
+
+#define RUN_CARD_X0 45
+#define RUN_CARD_Y0 18
+void displayUpdateRun() {
+  if (displaymode == MODE_MAIN) {
+    // gps card
+    display.fillRect(RUN_CARD_X0, RUN_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_BLACK);
+    display.drawRect(RUN_CARD_X0, RUN_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(RUN_CARD_X0+11, RUN_CARD_Y0+2);
+    display.print(F("RUN"));
+    if (isFlag(FLAG_RUN_OK)) {
+      display.setCursor(RUN_CARD_X0+2+12, RUN_CARD_Y0+11);
+      display.print(F("OK"));
+    } else {
+      display.setCursor(RUN_CARD_X0+2+3, RUN_CARD_Y0+11);
+      display.print(F("ERROR"));
+      display.fillRect(RUN_CARD_X0+1,RUN_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SSD1306_INVERSE);
+    }
+    setFlag(FLAG_DISPLAYCHANGE);
+  }  
+}
+
+void displayMain() {
+  display.clearDisplay();
+  displayUpdateTime(); // draw headline time
+  displayUpdateTimezone(); // draw headline timezone
+  displayUpdateGPS(); // draw gps card
+  displayUpdateSync(); // draw sync card
+  displayUpdateRun(); // draw run card
+  displayUpdateDrift(); // draw drift card
+}
+
+#define DRIFT_CARD_X0 45
+#define DRIFT_CARD_Y0 41
+void displayUpdateDrift() {
   if (displaymode == MODE_DRIFT) {
     displayDrift(); // just do the whole schebang
+  } else if (displaymode == MODE_MAIN) {
+    // drift card
+    display.fillRect(DRIFT_CARD_X0, DRIFT_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_BLACK);
+    display.drawRect(DRIFT_CARD_X0, DRIFT_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(DRIFT_CARD_X0+2+3, DRIFT_CARD_Y0+2);
+    display.print(F("TRACK"));
+    if (isFlag(FLAG_TIME_ERROR)) {
+      display.setCursor(DRIFT_CARD_X0+2+3, DRIFT_CARD_Y0+11);
+      display.print(F("ERROR"));
+    } else {
+      display.setCursor(DRIFT_CARD_X0+2, DRIFT_CARD_Y0+11);
+      if (drift_current >= 0) {
+        display.print("+");
+      }
+      display.print(drift_current);
+      display.print("s");
+    }
+    if (isFlag(FLAG_TIME_ERROR) || isFlag(FLAG_TIME_DRIFT)) {
+      display.fillRect(DRIFT_CARD_X0+1,DRIFT_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SSD1306_INVERSE);
+    }    
+    setFlag(FLAG_DISPLAYCHANGE);    
   }
 }
 
@@ -551,7 +686,7 @@ void displayDrift() {
   // determine scale
   int16_t fullscale = (drifthistory_getmaxmagnitude()/20 + 1)*20;
   // graph
-  display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0,GRAPH_WIDTH,SSD1306_WHITE); // horizontal axis
+  //display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0,GRAPH_WIDTH,SSD1306_WHITE); // horizontal axis
   display.drawFastVLine(GRAPH_X0, GRAPH_Y0-GRAPH_HEIGHT-2,GRAPH_Y0+GRAPH_HEIGHT+2,SSD1306_WHITE); // vertical axis
   display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0-GRAPH_HEIGHT,2,SSD1306_WHITE); // top tick
   display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0+GRAPH_HEIGHT,2,SSD1306_WHITE); // bottom tick
@@ -574,22 +709,32 @@ void displayDrift() {
   for (uint8_t i = 0; i < DRIFT_HISTORY_LENGTH; i++) {
     display.drawPixel(GRAPH_X0+(i*GRAPH_WIDTH)/DRIFT_HISTORY_LENGTH,GRAPH_Y0-drifthistory_getat(DRIFT_HISTORY_LENGTH-i-1)*GRAPH_HEIGHT/fullscale,SSD1306_WHITE);
   }
-  displayUpdateIcons();
+  //displayUpdateIcons();
+  /*
   // print the offset over the top
   display.setCursor(96,16);
-  display.print(drifthistory_getlast());
+  int16_t dhl = drifthistory_getlast();
+  if (dhl >=- 0) {
+    display.print("+");
+  }
+  display.print(dhl);
   display.setCursor(96,26);
   display.print(drift_current);
   display.setCursor(80,46);
   char s[] = "00:00";
   formatTimeHHMM(s, timetracked/60, timetracked%60);
   display.print(s);
+  */
+  displayUpdateTime();
+  displayUpdateTimezone();
   // update
   setFlag(FLAG_DISPLAYCHANGE);
 }
 
+#define SYNC_CARD_X0 2
+#define SYNC_CARD_Y0 41
 
-void displayUpdateSyncState() {
+void displayUpdateSync() {
   if (displaymode == MODE_SYNC) { // only update if in the correct mode
     display.fillRect(SYNC_DATAX, 40, SCREEN_WIDTH-SYNC_DATAX,18,SSD1306_BLACK);
     display.setCursor(SYNC_DATAX, 40);
@@ -600,6 +745,19 @@ void displayUpdateSyncState() {
       char s[] = "00:00";
       formatTimeHHMM(s, marktime/60, marktime%60);
       display.print(s);
+    }
+    setFlag(FLAG_DISPLAYCHANGE);
+  } else if (displaymode == MODE_MAIN) {
+    // sync card
+    display.fillRect(SYNC_CARD_X0, SYNC_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_BLACK);
+    display.drawRect(SYNC_CARD_X0, SYNC_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(SYNC_CARD_X0+2+6, SYNC_CARD_Y0+2);
+    display.print(F("SYNC"));
+    display.setCursor(SYNC_CARD_X0+2, SYNC_CARD_Y0+11);
+    display.print((__FlashStringHelper *)pgm_read_word(&syncstrings[syncstate]));
+    if (syncstate != SYNC_IDLE) {
+      display.fillRect(SYNC_CARD_X0+1,SYNC_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SSD1306_INVERSE);
     }
     setFlag(FLAG_DISPLAYCHANGE);
   }
@@ -614,52 +772,58 @@ void displaySync() {
   //display.print(F("RUN SYNC"));
   // instructions
   display.setTextSize(1);
-  display.setCursor(0,25);
-  display.print(F("PRESS UP TO START"));
+  display.setCursor(16,25);
+  display.print(F("PRESS UP TO SYNC"));
   display.setCursor(0,40);
   display.print(F("STATUS:"));
   display.setCursor(0,50);
   display.print(F("MARK:"));
-  displayUpdateSyncState();
-  displayUpdateIcons();
+  displayUpdateSync();
+  displayUpdateTime();
+  displayUpdateTimezone();
+  //displayUpdateIcons();
   // update
   setFlag(FLAG_DISPLAYCHANGE);
 }
 
+/*
 void displayUpdateIcons() {
-  display.fillRect(0,0,SCREEN_WIDTH,ICON_HEIGHT,SSD1306_BLACK);
-  if (isFlag(FLAG_RUN_OK)) {
-    display.drawBitmap(0,0,icon_run,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-  } else {
-    display.drawBitmap(0,0,icon_norun,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+  if (displaymode != MODE_MAIN) {
+    display.fillRect(0,0,SCREEN_WIDTH,ICON_HEIGHT,SSD1306_BLACK);
+    if (isFlag(FLAG_RUN_OK)) {
+      display.drawBitmap(0,0,icon_run,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+    } else {
+      display.drawBitmap(0,0,icon_norun,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+    }
+    if (isFlag(FLAG_GPS_HASTIME)) {
+      display.drawBitmap(16,0,icon_clock,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+    } else {
+      display.drawBitmap(16,0,icon_notime,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+    }
+    if (isFlag(FLAG_GPS_HASFIX)) {
+      display.drawBitmap(32,0,icon_signal,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+    } else {
+      display.drawBitmap(32,0,icon_nosignal,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+    }
+    if (isFlag(FLAG_TIME_SYNCED)) {
+      display.drawBitmap(48,0,icon_sync,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+    } else {
+      display.drawBitmap(48,0,icon_nosync,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+    } 
+    if (isFlag(FLAG_TIME_DRIFT)) {
+      display.drawBitmap(64,0,icon_driftbad,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+    } else {
+      display.drawBitmap(64,0,icon_driftok,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+    } 
+    if (isFlag(FLAG_TIME_ERROR)) {
+      display.drawBitmap(80,0,icon_zerobad,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+    } else {
+      display.drawBitmap(80,0,icon_zerook,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
+    }
+    setFlag(FLAG_DISPLAYCHANGE); 
   }
-  if (isFlag(FLAG_GPS_HASTIME)) {
-    display.drawBitmap(16,0,icon_clock,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-  } else {
-    display.drawBitmap(16,0,icon_notime,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-  }
-  if (isFlag(FLAG_GPS_HASFIX)) {
-    display.drawBitmap(32,0,icon_signal,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-  } else {
-    display.drawBitmap(32,0,icon_nosignal,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-  }
-  if (isFlag(FLAG_TIME_SYNCED)) {
-    display.drawBitmap(48,0,icon_sync,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-  } else {
-    display.drawBitmap(48,0,icon_nosync,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-  } 
-  if (isFlag(FLAG_TIME_DRIFT)) {
-    display.drawBitmap(64,0,icon_driftbad,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-  } else {
-    display.drawBitmap(64,0,icon_driftok,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-  } 
-  if (isFlag(FLAG_TIME_ERROR)) {
-    display.drawBitmap(80,0,icon_zerobad,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-  } else {
-    display.drawBitmap(80,0,icon_zerook,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
-  }
-  setFlag(FLAG_DISPLAYCHANGE); 
 }
+*/
 
 void formatTimeHHMMSS(char* buf, uint8_t h, uint8_t m, uint8_t s) {
   sprintf(&buf[0], "%02d", h);
@@ -707,9 +871,10 @@ void processGPS() {
               setFlag(FLAG_GPS_HASTIME);
               if ((isFlag(FLAG_TIME_SYNCED)) && (s==0) && (m%10==0)) { // in sync, and it's a 10-minute line
                 drifthistory_append(drift_current); // append last measured drift history
-                displayUpdateDriftChart();
+                displayUpdateDrift();
               }
               displayUpdateTime();
+              displayUpdateGPS();
             } else {
               clearFlag(FLAG_GPS_HASTIME);
             }
@@ -754,9 +919,9 @@ void loop() {
         eeprom_update_word(&tzoffset_ee, tzoffset_minutes);
       }
     }
-    // update LED status and icons
     if (subdiv%TICKDIV2==0) {
-      displayUpdateIcons();
+      //displayUpdateIcons();
+      // update LED status
       if (syncRunning()) {
         // sync is running
         setLamp(pixels.Color(0,0,255), FLASHSETTING_FAST); // blue flash
@@ -780,6 +945,7 @@ void loop() {
         // not consistent
         clearFlag(FLAG_RUN_OK);
       }
+      displayUpdateRun();
       // auto sync if conditions right and no sync currently
       if ((!syncRunning()) && (!isFlag(FLAG_TIME_SYNCED)) && isFlag(FLAG_GPS_HASTIME) && isFlag(FLAG_GPS_HASFIX) && isFlag(FLAG_RUN_OK)) {
         syncBegin();
@@ -835,20 +1001,22 @@ void loop() {
               if (timeoutcount > SYNC_RUNTIMEOUT) {
                 syncstate = SYNC_ERROR;
                 clearFlag(FLAG_RUN_OK);
-                displayUpdateSyncState();
+                displayUpdateSync();
+                displayUpdateRun();
               }
               ticker_sync = SYNC_RUNRETRYTICKS; // 100ms until resample
             } else {
               // low = voltage on reset line (not running); proceed
               setFlag(FLAG_RUN_OK);
               syncstate = SYNC_ZERO_M0;
-              displayUpdateSyncState();
+              displayUpdateSync();
+              displayUpdateRun();
               timeoutcount = 0; // reset for use as zero limiter
             }
           } else {
             // gps time is no good; go to error rather than start the sync
             syncstate = SYNC_ERROR;
-            displayUpdateSyncState();
+            displayUpdateSync();
           }
           break;
         case SYNC_ZERO_M0:
@@ -857,7 +1025,7 @@ void loop() {
             if (timeoutcount > SYNC_MAXZERO_M) {
               // too many presses; error!
               syncstate = SYNC_ERROR;
-              displayUpdateSyncState();
+              displayUpdateSync();
             } else {
               // press the advance button
               digitalWrite(PIN_ADV_M, 1); // high --> active
@@ -867,7 +1035,7 @@ void loop() {
           } else {
             // low = M0 is zero
             syncstate = SYNC_ZERO_H; // continue on next tick
-            displayUpdateSyncState();
+            displayUpdateSync();
             timeoutcount = 0;
           }
           break;
@@ -877,7 +1045,7 @@ void loop() {
             if (timeoutcount > SYNC_MAXZERO_H) {
               // too many presses; error!
               syncstate = SYNC_ERROR;
-              displayUpdateSyncState();
+              displayUpdateSync();
             } else {
               digitalWrite(PIN_ADV_H, 1); // high --> active
               ticker_adv = SYNC_PULSETICKS; // pulse
@@ -894,7 +1062,7 @@ void loop() {
             marktime%=MINUTESPERDAY; // roll around midnight (unlikely...)
             advcount = marktime / 60; // number of presses = hour
             syncstate = SYNC_SET_H; // continue on next tick
-            displayUpdateSyncState();
+            displayUpdateSync();
             timeoutcount = 0; // not sure whether i'll need this again, but zero anyway
           }
           break;
@@ -902,7 +1070,7 @@ void loop() {
           if (advcount == 0) {
             advcount = marktime % 60; // number of presses = minute
             syncstate = SYNC_SET_M;
-            displayUpdateSyncState();
+            displayUpdateSync();
           } else {
             advcount--;
             digitalWrite(PIN_ADV_H, 1); // high --> active
@@ -913,7 +1081,7 @@ void loop() {
         case SYNC_SET_M:
           if (advcount == 0) {
             syncstate = SYNC_WAITMARK;
-            displayUpdateSyncState();
+            displayUpdateSync();
           } else {
             advcount--;
             digitalWrite(PIN_ADV_M, 1); // high --> active
@@ -927,7 +1095,7 @@ void loop() {
             timetracked = (marktime/10)*10; // init tracking time to the 10 mins before mark time
             setFlag(FLAG_TIME_SYNCED);
             syncstate = SYNC_IDLE;
-            displayUpdateSyncState();
+            displayUpdateSync();
           }
           break;
         case SYNC_IDLE:
