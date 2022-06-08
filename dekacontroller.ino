@@ -31,6 +31,11 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 #include "icons.h"
 
+// ticker definition
+#define TICKRATE 25 // ms
+#define TICKDIV1 8
+#define TICKDIV2 32
+
 // buttons
 #define BUTTONCOUNT 4
 #define PIN_BUTTON0 7
@@ -51,7 +56,7 @@ const uint8_t buttonpin[BUTTONCOUNT] = {7,8,9,10};
 volatile uint8_t lastinputstate = 0x00;
 volatile uint8_t ticker_debounce[BUTTONCOUNT+1] = {0}; // buttongs + M0
 void (*debouncefunc[])() = {&button0, &button1, &button2, &button3, &m0low};
-#define DEBOUNCETICKS 5 // x10ms approx
+#define DEBOUNCETICKS (50/TICKRATE) // 50ms approx
 
 // serial
 #define RX_BAUD 9600
@@ -72,6 +77,9 @@ volatile uint8_t serialbufferindex = 0;
 // adressable led output
 #define PIN_LEDA 17
 #define NUM_LEDS 1
+#define FLASHSETTING_SLOW (1000/TICKRATE)
+#define FLASHSETTING_FAST (300/TICKRATE)
+#define FLASHSETTING_NONE 0
 Adafruit_NeoPixel pixels(NUM_LEDS, PIN_LEDA, NEO_GRB+NEO_KHZ800);
 volatile uint8_t flashsetting = 0;
 volatile uint32_t lampcolor = pixels.Color(0,0,0);
@@ -119,7 +127,7 @@ inline bool isFlag(uint8_t flag) {
 #define MODE_SYNC 2
 #define MODECOUNT 3
 volatile uint8_t displaymode = MODE_TIME;
-#define SETTINGCHANGETIMEOUT 62 // x80ms (c. 5sec)
+#define SETTINGCHANGETIMEOUT (5000/TICKRATE/TICKDIV2) // 5 seconds
 volatile uint8_t settingchangetimeout = 0;
 
 // sync states
@@ -144,10 +152,11 @@ const char syncstring7[] PROGMEM = "Error";
 const char* const syncstrings[] PROGMEM = {syncstring0, syncstring1, syncstring2, syncstring3, syncstring4, syncstring5, syncstring6, syncstring7};
 
 // sync parameters
-#define SYNC_PULSETICKS 5 // x10ms
+#define SYNC_PULSETICKS (50/TICKRATE) // 50ms
 #define SYNC_PULSEFREQ 4 // Hz
-#define SYNC_PULSEPERIOD (100/SYNC_PULSEFREQ) // x10ms
-#define SYNC_RUNTIMEOUT 50 // x100ms
+#define SYNC_PULSEPERIOD (1000/TICKRATE/SYNC_PULSEFREQ) // ms/sec / ms/tick / (cyc/sec) = tick/cyc
+#define SYNC_RUNRETRYTICKS (100/TICKRATE) // 100ms
+#define SYNC_RUNTIMEOUT (5000/SYNC_RUNRETRYTICKS) // 5 sec
 #define SYNC_MAXZERO_M 10 // max presses to zero M0
 #define SYNC_MAXZERO_H 24 // max presses to zero H0 + H00
 
@@ -162,12 +171,14 @@ volatile uint8_t timeoutcount = 0;
 #define MINUTESPERDAY (60*24)
 #define SECONDSPERDAY (60*60*24)
 #define TZ_INC 15 // minutes
+#define GPSTIMEOUT (5000/TICKRATE/TICKDIV2) // 5 seconds
 volatile uint8_t hour_local = 0; //local
 volatile uint8_t minute_local = 0; //local
 volatile uint8_t second_local = 0;
 volatile int16_t tzoffset_minutes = 0;
 int16_t EEMEM tzoffset_ee = 0;
 volatile uint16_t timetracked = 0; // what we believe the clock to read, minutes from midnight
+volatile uint8_t gpstimeout = 0;
 
 void setLocalTime(uint8_t hour_utc, uint8_t minute_utc, uint8_t second_utc) {
   int16_t hm = hour_utc*60 + minute_utc;
@@ -460,12 +471,12 @@ void tz_decrease() {
 
 void displayUpdateTime() {
   if (displaymode == MODE_TIME) { // only if in correct mode
-    display.fillRect(TIME_DATAX, 20, display.width()-TIME_DATAX,8,SSD1306_BLACK);
+    display.fillRect(TIME_DATAX, 20, SCREEN_WIDTH-TIME_DATAX,8,SSD1306_BLACK);
     display.setCursor(TIME_DATAX,20);
     char stime[] = " 00:00:00";
     formatTimeHHMMSS(&stime[1], hour_local, minute_local, second_local);
     display.print(stime);
-    display.fillRect(TIME_DATAX, 40, display.width()-TIME_DATAX,8,SSD1306_BLACK);
+    display.fillRect(TIME_DATAX, 40, SCREEN_WIDTH-TIME_DATAX,8,SSD1306_BLACK);
     display.setCursor(TIME_DATAX,40);
     display.print(F("F="));
     if (isFlag(FLAG_GPS_HASFIX)) {
@@ -485,7 +496,7 @@ void displayUpdateTime() {
 
 void displayUpdateTimezone() {
   if (displaymode == MODE_TIME) { // only if in correct mode
-    display.fillRect(TIME_DATAX, 30, display.width()-TIME_DATAX,8,SSD1306_BLACK);
+    display.fillRect(TIME_DATAX, 30, SCREEN_WIDTH-TIME_DATAX,8,SSD1306_BLACK);
     display.setCursor(TIME_DATAX,30);
     if (tzoffset_minutes >= 0) {
       display.print(F("+"));
@@ -580,12 +591,12 @@ void displayDrift() {
 
 void displayUpdateSyncState() {
   if (displaymode == MODE_SYNC) { // only update if in the correct mode
-    display.fillRect(SYNC_DATAX, 40, display.width()-SYNC_DATAX,18,SSD1306_BLACK);
+    display.fillRect(SYNC_DATAX, 40, SCREEN_WIDTH-SYNC_DATAX,18,SSD1306_BLACK);
     display.setCursor(SYNC_DATAX, 40);
     display.setTextSize(1);
     display.print((__FlashStringHelper *)pgm_read_word(&syncstrings[syncstate]));
     display.setCursor(SYNC_DATAX, 50);
-    if (syncstate > SYNC_IDLE) {
+    if (syncstate > SYNC_ZERO_H) {
       char s[] = "00:00";
       formatTimeHHMM(s, marktime/60, marktime%60);
       display.print(s);
@@ -616,7 +627,7 @@ void displaySync() {
 }
 
 void displayUpdateIcons() {
-  display.fillRect(0,0,display.width(),ICON_HEIGHT,SSD1306_BLACK);
+  display.fillRect(0,0,SCREEN_WIDTH,ICON_HEIGHT,SSD1306_BLACK);
   if (isFlag(FLAG_RUN_OK)) {
     display.drawBitmap(0,0,icon_run,ICON_WIDTH,ICON_HEIGHT,SSD1306_WHITE);
   } else {
@@ -728,10 +739,14 @@ void setLamp(uint32_t newcolor, uint8_t newflashsetting) {
     flashsetting = newflashsetting;
 }
 
+inline bool syncRunning() {
+  return (bool)((syncstate > SYNC_IDLE) && (syncstate < SYNC_ERROR));
+}
+
 void loop() {
-  delay(10); // ticker 10ms
+  delay(TICKRATE); // ticker
   subdiv++;
-  if (subdiv%8==0) {
+  if (subdiv%TICKDIV1==0) {
     // settingtimeout
     if (settingchangetimeout > 0) {
       settingchangetimeout--;
@@ -739,25 +754,25 @@ void loop() {
         eeprom_update_word(&tzoffset_ee, tzoffset_minutes);
       }
     }
-    // update LED status and icons (every 320ms approx)
-    if (subdiv%64==0) {
+    // update LED status and icons
+    if (subdiv%TICKDIV2==0) {
       displayUpdateIcons();
-      if (syncstate != SYNC_IDLE) {
+      if (syncRunning()) {
         // sync is running
-        setLamp(pixels.Color(0,0,255), 30); // blue flash
+        setLamp(pixels.Color(0,0,255), FLASHSETTING_FAST); // blue flash
       } else if ((!isFlag(FLAG_GPS_HASTIME)) || (!isFlag(FLAG_RUN_OK)) || (!isFlag(FLAG_TIME_SYNCED))) {
         // error
-        setLamp(pixels.Color(255,0,0), 30); // red, quick flash
+        setLamp(pixels.Color(255,0,0), FLASHSETTING_FAST); // red, quick flash
       } else if ((!isFlag(FLAG_GPS_HASFIX)) || isFlag(FLAG_TIME_DRIFT)) {
         // warning
-        setLamp(pixels.Color(128,128,0), 60); // orange, slow flash
+        setLamp(pixels.Color(128,128,0), FLASHSETTING_SLOW); // orange, slow flash
       } else {
         // ok
-        setLamp(pixels.Color(0,255,0), 0); // green, steady
+        setLamp(pixels.Color(0,255,0), FLASHSETTING_NONE); // green, steady
       }
       //pixels.show();
     }
-    if (subdiv==0) { // approx 2.5 second intervals
+    if (subdiv==0) { // max interval; 255*tickdiv (10ms: 2.5sec, 20ms: 5 sec, 25ms: 6.3 sec)
       // check run state from time to time
       if (digitalRead(PIN_RUN_OUT) == digitalRead(PIN_RUN_IN)) { // out=high=pull run voltage down (i.e. active), in=high=run voltage low (i.e. active)
         setFlag(FLAG_RUN_OK); // if reading is what we want, no reason to report error!
@@ -766,7 +781,7 @@ void loop() {
         clearFlag(FLAG_RUN_OK);
       }
       // auto sync if conditions right and no sync currently
-      if ((syncstate == SYNC_IDLE) && (!isFlag(FLAG_TIME_SYNCED)) && isFlag(FLAG_GPS_HASTIME) && isFlag(FLAG_GPS_HASFIX) && isFlag(FLAG_RUN_OK)) {
+      if ((!syncRunning()) && (!isFlag(FLAG_TIME_SYNCED)) && isFlag(FLAG_GPS_HASTIME) && isFlag(FLAG_GPS_HASFIX) && isFlag(FLAG_RUN_OK)) {
         syncBegin();
       }
     }
@@ -822,7 +837,7 @@ void loop() {
                 clearFlag(FLAG_RUN_OK);
                 displayUpdateSyncState();
               }
-              ticker_sync = 10; // 100ms until resample
+              ticker_sync = SYNC_RUNRETRYTICKS; // 100ms until resample
             } else {
               // low = voltage on reset line (not running); proceed
               setFlag(FLAG_RUN_OK);
@@ -876,6 +891,7 @@ void loop() {
               marktime += 1; // next minute
             } else
               marktime += 2; // the one after
+            marktime%=MINUTESPERDAY; // roll around midnight (unlikely...)
             advcount = marktime / 60; // number of presses = hour
             syncstate = SYNC_SET_H; // continue on next tick
             displayUpdateSyncState();
