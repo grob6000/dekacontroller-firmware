@@ -1,0 +1,34 @@
+TEST NOTES:
+
+A. TIMEZONE
+    1. Update TIMEZONE
+    2. Wait 10 sec
+    3. Power off
+    4. Power on
+    5. Check timezone is saved PASS
+    6. Repeat for negative timezone
+
+B. Mark Time  PASS
+    1. Connect, power on
+    2. Run sync
+    3. Check mark time
+    4. Check sync occurs correctly PASS
+
+C. Tracking
+    1. Run sync
+    2. Leave going for a few hours
+    3. Check graph sync value against displayed gps time
+
+    - +4 seconds appears below the line
+    - value constant
+    - RUN_OK is always FALSE
+
+D. Debouncing PASS
+    1. Check all buttons work  PASS
+
+E. Flag Update
+    1. Check GPS flags update OK
+
+    - RUN_OK is always FALSE (check logic)
+
+F. 

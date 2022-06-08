@@ -102,7 +102,7 @@ volatile bool flashon = false;
 #define FLAG_GPS_HASTIME 1 // set when last gps message included time
 #define FLAG_GPS_HASFIX 2 // set when last gps message included fix
 #define FLAG_GPS_OLDFIX 3 // set when a gps message since boot included fix
-#define FLAG_TIME_SYNCED 4 // set when sync routine was completed since boot
+//#define FLAG_TIME_SYNCED 4 // set when sync routine was completed since boot
 #define FLAG_TIME_DRIFT 5 // set when measured drift of clock exceeds threshold
 #define FLAG_TIME_ERROR 6  // set when inputs are inconsistent with tracked time
 #define FLAG_DISPLAYCHANGE 7 // set when there are changes in the display buffer
@@ -132,17 +132,17 @@ volatile uint8_t displaymode = MODE_MAIN;
 volatile uint8_t settingchangetimeout = 0;
 
 // sync states
-#define SYNC_IDLE 0
-#define SYNC_BEGIN 1
-#define SYNC_ZERO_M0 2
-#define SYNC_ZERO_H 3
-#define SYNC_SET_H 4
-#define SYNC_SET_M 5
-#define SYNC_WAITMARK 6
-#define SYNC_ERROR 7
-#define SYNCCOUNT 8
-volatile uint8_t syncstate = SYNC_IDLE;
-const char syncstring0[] PROGMEM = " IDLE"; // space to center in 6 chars
+#define SYNC_OK 0 // clock has been synchronised and is running
+#define SYNC_BEGIN 1 // sync is beginning
+#define SYNC_ZERO_M0 2 // return M0 to zero (M00 will be zeroed by h advance)
+#define SYNC_ZERO_H 3 // return H0 and H00 to zero
+#define SYNC_SET_H 4 // set H to value
+#define SYNC_SET_M 5 // set M to value
+#define SYNC_WAITMARK 6 // wait for mark time to hit run
+#define SYNC_ERROR 7 // there was an error when attempting to sync; manual intervention expected
+#define SYNC_NONE 8 // no sync (or invalid sync): should automatically resync
+volatile uint8_t syncstate = SYNC_NONE; // init to no sync
+const char syncstring0[] PROGMEM = "  OK"; // space to center in 6 chars
 const char syncstring1[] PROGMEM = "BEGIN";
 const char syncstring2[] PROGMEM = "ZERO M";
 const char syncstring3[] PROGMEM = "ZERO H";
@@ -150,7 +150,8 @@ const char syncstring4[] PROGMEM = "SET H";
 const char syncstring5[] PROGMEM = "SET M";
 const char syncstring6[] PROGMEM = " WAIT"; // space to center in 6 chars
 const char syncstring7[] PROGMEM = "ERROR";
-const char* const syncstrings[] PROGMEM = {syncstring0, syncstring1, syncstring2, syncstring3, syncstring4, syncstring5, syncstring6, syncstring7};
+const char syncstring8[] PROGMEM = " NONE"; // space for 6 chars
+const char* const syncstrings[] PROGMEM = {syncstring0, syncstring1, syncstring2, syncstring3, syncstring4, syncstring5, syncstring6, syncstring7, syncstring8};
 
 // sync parameters
 #define SYNC_PULSETICKS (50/TICKRATE) // 50ms
@@ -425,7 +426,7 @@ void button3() {
 }
 
 void m0low() {
-  if ((syncstate == SYNC_IDLE) && (isFlag(FLAG_TIME_SYNCED))) {
+  if (syncstate == SYNC_OK) {
     // should be running in sync
     timetracked += 10; // add ten minutes
     timetracked %= MINUTESPERDAY; // around the clock
@@ -441,15 +442,14 @@ void m0low() {
       checkok = false;
     }        
     if (checkok) {
-      clearFlag(FLAG_TIME_ERROR);
+      drift_current = (timetracked - (hour_local*60 + minute_local))*60 - second_local; // update live drift (pushed into array by GPS clock)
+      if (abs(drift_current) > DRIFT_THRESHOLD) {
+        setFlag(FLAG_TIME_DRIFT);
+      } else {
+        clearFlag(FLAG_TIME_DRIFT);
+      }
     } else {
       setFlag(FLAG_TIME_ERROR);
-    }
-    drift_current = (timetracked - (hour_local*60 + minute_local))*60 - second_local; // update live drift (pushed into array by GPS clock)
-    if (abs(drift_current) > DRIFT_THRESHOLD) {
-      setFlag(FLAG_TIME_DRIFT);
-    } else {
-      clearFlag(FLAG_TIME_DRIFT);
     }
     displayUpdateDrift();
   }
@@ -756,7 +756,7 @@ void displayUpdateSync() {
     display.print(F("SYNC"));
     display.setCursor(SYNC_CARD_X0+2, SYNC_CARD_Y0+11);
     display.print((__FlashStringHelper *)pgm_read_word(&syncstrings[syncstate]));
-    if (syncstate != SYNC_IDLE) {
+    if (syncstate != SYNC_OK) {
       display.fillRect(SYNC_CARD_X0+1,SYNC_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SSD1306_INVERSE);
     }
     setFlag(FLAG_DISPLAYCHANGE);
@@ -869,7 +869,7 @@ void processGPS() {
               uint8_t s = (serialbuffer[i0+5]-'0')*10 + (serialbuffer[i0+6]-'0');
               setLocalTime(h,m,s);
               setFlag(FLAG_GPS_HASTIME);
-              if ((isFlag(FLAG_TIME_SYNCED)) && (s==0) && (m%10==0)) { // in sync, and it's a 10-minute line
+              if ((syncstate==SYNC_OK) && (s==0) && (m%10==0)) { // in sync, and it's a 10-minute line
                 drifthistory_append(drift_current); // append last measured drift history
                 displayUpdateDrift();
               }
@@ -905,7 +905,7 @@ void setLamp(uint32_t newcolor, uint8_t newflashsetting) {
 }
 
 inline bool syncRunning() {
-  return (bool)((syncstate > SYNC_IDLE) && (syncstate < SYNC_ERROR));
+  return (bool)((syncstate > SYNC_OK) && (syncstate < SYNC_ERROR));
 }
 
 void loop() {
@@ -916,7 +916,11 @@ void loop() {
     if (settingchangetimeout > 0) {
       settingchangetimeout--;
       if (settingchangetimeout==0) {
-        eeprom_update_word(&tzoffset_ee, tzoffset_minutes);
+        int16_t oldvalue = eeprom_read_word(&tzoffset_ee);
+        if (oldvalue != tzoffset_minutes) {
+          eeprom_write_word(&tzoffset_ee, tzoffset_minutes);
+          syncstate = SYNC_NONE; // this will automatically resync the clock
+        }
       }
     }
     if (subdiv%TICKDIV2==0) {
@@ -925,7 +929,7 @@ void loop() {
       if (syncRunning()) {
         // sync is running
         setLamp(pixels.Color(0,0,255), FLASHSETTING_FAST); // blue flash
-      } else if ((!isFlag(FLAG_GPS_HASTIME)) || (!isFlag(FLAG_RUN_OK)) || (!isFlag(FLAG_TIME_SYNCED))) {
+      } else if ((!isFlag(FLAG_GPS_HASTIME)) || (!isFlag(FLAG_RUN_OK)) || (syncstate>=SYNC_ERROR)) {
         // error
         setLamp(pixels.Color(255,0,0), FLASHSETTING_FAST); // red, quick flash
       } else if ((!isFlag(FLAG_GPS_HASFIX)) || isFlag(FLAG_TIME_DRIFT)) {
@@ -960,7 +964,7 @@ void loop() {
       }
       displayUpdateRun();
       // auto sync if conditions right and no sync currently
-      if ((!syncRunning()) && (!isFlag(FLAG_TIME_SYNCED)) && isFlag(FLAG_GPS_HASTIME) && isFlag(FLAG_GPS_HASFIX) && isFlag(FLAG_RUN_OK)) {
+      if ((syncstate == SYNC_NONE) && isFlag(FLAG_GPS_HASTIME) && isFlag(FLAG_GPS_HASFIX) && isFlag(FLAG_RUN_OK)) {
         syncBegin();
       }
     }
@@ -994,7 +998,7 @@ void loop() {
     clearFlag(FLAG_DISPLAYCHANGE);
   }
   // sync process
-  if (syncstate != SYNC_IDLE) {
+  if (syncRunning()) {
     if (ticker_adv == 0) { // reset advance pins (low --> inactive)
       digitalWrite(PIN_ADV_H, 0);
       digitalWrite(PIN_ADV_M, 0);
@@ -1106,13 +1110,14 @@ void loop() {
           if ((hour_local*60 + minute_local) == (marktime)) {
             digitalWrite(PIN_RUN_OUT, 1); // high = run
             timetracked = (marktime/10)*10; // init tracking time to the 10 mins before mark time
-            setFlag(FLAG_TIME_SYNCED);
-            syncstate = SYNC_IDLE;
+            clearFlag(FLAG_TIME_ERROR);
+            syncstate = SYNC_OK;
             displayUpdateSync();
           }
           break;
-        case SYNC_IDLE:
+        case SYNC_OK:
         case SYNC_ERROR:
+        case SYNC_NONE:
         default:
           break;
       }
