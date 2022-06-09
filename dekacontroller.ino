@@ -115,9 +115,10 @@ volatile bool flashon = false;
 #define FLAG_GPS_HASTIME 1 // set when last gps message included time
 #define FLAG_GPS_HASFIX 2 // set when last gps message included fix
 #define FLAG_GPS_OLDFIX 3 // set when a gps message since boot included fix
-#define FLAG_TIME_DRIFT 4 // set when measured drift of clock exceeds threshold
-#define FLAG_TIME_ERROR 5  // set when inputs are inconsistent with tracked time
-#define FLAG_DISPLAYCHANGE 6 // set when there are changes in the display buffer
+#define FLAG_GPS_COMMS 4 // set when we've received a gps message in the last few seconds
+#define FLAG_TIME_DRIFT 5 // set when measured drift of clock exceeds threshold
+#define FLAG_TIME_ERROR 6  // set when inputs are inconsistent with tracked time
+#define FLAG_DISPLAYCHANGE 7 // set when there are changes in the display buffer
 
 volatile uint8_t flags = 0x00;
 
@@ -551,18 +552,22 @@ void displayUpdateGPS() {
     display.setTextSize(1);
     display.setCursor(GPS_CARD_X0+11, GPS_CARD_Y0+2);
     display.print(F("GPS"));
-    bool invert = false;
-    if (isFlag(FLAG_GPS_HASFIX)) {
-      display.setCursor(GPS_CARD_X0+2+9, GPS_CARD_Y0+11);
-      display.print(F("FIX"));
-    } else if (isFlag(FLAG_GPS_HASTIME)) {
-      display.setCursor(GPS_CARD_X0+2+6, GPS_CARD_Y0+11);
-      display.print(F("TIME"));
-      invert = true;
-    } else {
+    bool invert = true;
+    if (isFlag(FLAG_GPS_HASTIME)) {
+      if (isFlag(FLAG_GPS_HASFIX)) {
+        display.setCursor(GPS_CARD_X0+2+9, GPS_CARD_Y0+11);
+        display.print(F("FIX"));
+        invert=false;
+      } else {
+        display.setCursor(GPS_CARD_X0+2+6, GPS_CARD_Y0+11);
+        display.print(F("TIME"));
+      }
+    } else if (isFlag(FLAG_GPS_COMMS)) {
       display.setCursor(GPS_CARD_X0+2+3, GPS_CARD_Y0+11);
       display.print(F("ERROR"));
-      invert = true;
+    } else {
+      display.setCursor(GPS_CARD_X0+2+6, GPS_CARD_Y0+11);
+      display.print(F("COMMS"));      
     }
     if (invert) {
       display.fillRect(GPS_CARD_X0+1,GPS_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SSD1306_INVERSE);
@@ -746,6 +751,8 @@ void processGPS() {
     //GPRMC
     uint8_t i0 = 0;
     uint8_t p = 0;
+    uint8_t oldflags = flags; // to check if we've changed them
+    setFlag(FLAG_GPS_COMMS); // have communications with GPS
     gpstimeout = 0;
     for (uint8_t i = 0; i < serialbufferindex; i++) {
       if (serialbuffer[i] == ',') {
@@ -762,7 +769,6 @@ void processGPS() {
                 displayUpdateDrift();
               }
               displayUpdateTime();
-              displayUpdateGPS();
             } else {
               clearFlag(FLAG_GPS_HASTIME);
             }
@@ -775,6 +781,10 @@ void processGPS() {
               clearFlag(FLAG_GPS_HASFIX);
             }
             break;
+        }
+        // check if any flags were altered, in which case update gps tile
+        if ((flags ^ oldflags) & ((1<<FLAG_GPS_HASFIX)|(1<<FLAG_GPS_HASTIME)|(1<<FLAG_GPS_OLDFIX))) {
+          displayUpdateGPS();
         }
         i0 = i;
         p++;
@@ -832,6 +842,7 @@ void loop() {
         clearFlag(FLAG_GPS_HASFIX);
         clearFlag(FLAG_GPS_HASTIME);
         clearFlag(FLAG_GPS_OLDFIX);
+        clearFlag(FLAG_GPS_COMMS);
         if (syncRunning()) {
           syncstate = SYNC_ERROR;
           displayUpdateSync();
