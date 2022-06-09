@@ -537,6 +537,7 @@ void displayTimezoneEdit() {
   // update timezone editor display
   display.clearDisplay();
   display.setCursor(4,25);
+  display.setTextSize(1);
   display.print(F("UP/DN TO SET OFFSET:"));
   displayUpdateTime();
   displayUpdateTimezone();
@@ -841,7 +842,7 @@ void loop() {
         setLamp(pixels.Color(255,0,0), FLASHSETTING_FAST); // red, quick flash
       } else if ((!isFlag(FLAG_GPS_HASFIX)) || isFlag(FLAG_TIME_DRIFT)) {
         // warning
-        setLamp(pixels.Color(128,128,0), FLASHSETTING_SLOW); // orange, slow flash
+        setLamp(pixels.Color(255,128,0), FLASHSETTING_SLOW); // orange, slow flash
       } else {
         // ok
         setLamp(pixels.Color(0,255,0), FLASHSETTING_NONE); // green, steady
