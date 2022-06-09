@@ -566,7 +566,7 @@ void displayUpdateGPS() {
       display.setCursor(GPS_CARD_X0+2+3, GPS_CARD_Y0+11);
       display.print(F("ERROR"));
     } else {
-      display.setCursor(GPS_CARD_X0+2+6, GPS_CARD_Y0+11);
+      display.setCursor(GPS_CARD_X0+2+3, GPS_CARD_Y0+11);
       display.print(F("COMMS"));      
     }
     if (invert) {
@@ -621,7 +621,17 @@ void displayUpdateDrift() {
       display.setCursor(DRIFT_CARD_X0+2+3, DRIFT_CARD_Y0+11);
       display.print(F("ERROR"));
     } else {
-      display.setCursor(DRIFT_CARD_X0+2, DRIFT_CARD_Y0+11);
+      uint8_t offset = 9;
+      if (abs(drift_current) >= 10) {
+        offset = 6;
+        if (abs(drift_current) >= 100) {
+          offset = 3;
+          if (abs(drift_current) >= 1000) {
+            offset = 0;
+          }
+        }
+      }
+      display.setCursor(DRIFT_CARD_X0+2+offset, DRIFT_CARD_Y0+11);
       if (drift_current >= 0) {
         display.print("+");
       }
@@ -783,7 +793,7 @@ void processGPS() {
             break;
         }
         // check if any flags were altered, in which case update gps tile
-        if ((flags ^ oldflags) & ((1<<FLAG_GPS_HASFIX)|(1<<FLAG_GPS_HASTIME)|(1<<FLAG_GPS_OLDFIX))) {
+        if ((flags ^ oldflags) & ((1<<FLAG_GPS_HASFIX)|(1<<FLAG_GPS_HASTIME)|(1<<FLAG_GPS_OLDFIX)|(1<<FLAG_GPS_COMMS))) {
           displayUpdateGPS();
         }
         i0 = i;
