@@ -162,9 +162,9 @@ const char syncstring3[] PROGMEM = "ZERO H";
 const char syncstring4[] PROGMEM = "SET H";
 const char syncstring5[] PROGMEM = "SET M";
 const char syncstring6[] PROGMEM = " WAIT"; // space to center in 6 chars
-const char syncstring7[] PROGMEM = "ERROR";
-const char syncstring8[] PROGMEM = " NONE"; // space for 6 chars
-const char* const syncstrings[] PROGMEM = {syncstring0, syncstring1, syncstring2, syncstring3, syncstring4, syncstring5, syncstring6, syncstring7, syncstring8};
+const char str_error[] PROGMEM = "ERROR";
+const char str_none[] PROGMEM = " NONE"; // space for 6 chars
+const char* const syncstrings[] PROGMEM = {syncstring0, syncstring1, syncstring2, syncstring3, syncstring4, syncstring5, syncstring6, str_error, str_none};
 
 // sync parameters
 #define SYNC_PULSETICKS (50/TICKRATE) // 50ms
@@ -421,6 +421,10 @@ void button1(void) {
 void button2(void) {
   displaymode++;
   displaymode %= MODECOUNT;
+  refreshDisplay();
+}
+
+void refreshDisplay(void) {
   switch (displaymode) {
     case MODE_TIME:
       displayTimezoneEdit();
@@ -544,7 +548,6 @@ void displayTimezoneEdit() {
   setFlag(FLAG_DISPLAYCHANGE);
 }
 
-
 void displayUpdateGPS() {
   if (displaymode == MODE_MAIN) {
     // gps card
@@ -556,12 +559,12 @@ void displayUpdateGPS() {
     bool invert = true;
     if (isFlag(FLAG_GPS_HASTIME)) {
       if (isFlag(FLAG_GPS_HASFIX)) {
-        display.setCursor(GPS_CARD_X0+2+9, GPS_CARD_Y0+11);
-        display.print(F("FIX"));
+        display.setCursor(GPS_CARD_X0+2+12, GPS_CARD_Y0+11);
+        display.print(F("OK"));
         invert=false;
       } else {
-        display.setCursor(GPS_CARD_X0+2+6, GPS_CARD_Y0+11);
-        display.print(F("TIME"));
+        display.setCursor(GPS_CARD_X0+2+3, GPS_CARD_Y0+11);
+        display.print(F("NOFIX"));
       }
     } else if (isFlag(FLAG_GPS_COMMS)) {
       display.setCursor(GPS_CARD_X0+2+3, GPS_CARD_Y0+11);
@@ -871,7 +874,8 @@ void loop() {
         // not consistent
         clearFlag(FLAG_RUN_OK);
       }
-      displayUpdateRun();
+      //displayUpdateRun();
+      refreshDisplay(); // full refresh of display
       // auto sync if conditions right and no sync currently
       if ((syncstate == SYNC_NONE) && isFlag(FLAG_GPS_HASTIME) && isFlag(FLAG_GPS_HASFIX) && isFlag(FLAG_RUN_OK)) {
         syncBegin();
