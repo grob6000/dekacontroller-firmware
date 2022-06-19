@@ -1,5 +1,6 @@
 #include <SPI.h>
 #include <Wire.h>
+#define SSD1306_NO_SPLASH
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <pins_arduino.h>
@@ -12,13 +13,14 @@
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
 #define OLED_RESET -1 // no reset
 #define SCREEN_ADDRESS 0x3C
+
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define DATAX 45
 #define TIME_DATAX DATAX
 #define SYNC_DATAX DATAX
 #define GRAPH_Y0 40
 #define GRAPH_X0 20
-#define GRAPH_WIDTH 108
+#define GRAPH_WIDTH 72
 #define GRAPH_HEIGHT 20
 #define ICON_HEIGHT   16
 #define ICON_WIDTH    16
@@ -72,16 +74,19 @@ void (*debouncefunc[])() = {&button0, &button1, &button2, &button3, &m0low};
 #define DEBOUNCETICKS (50/TICKRATE) // 50ms approx
 
 // serial
-#define RX_BAUD 9600
-#define RX_UBRR (F_CPU/16/RX_BAUD-1)
+#define UART_BAUD 9600
+#define UART_UBRR (F_CPU/16/UART_BAUD-1)
 #define CR 0x0D
 #define LF 0x0A
-#define SERIALBUFFERSIZE 84
+#define RXBUFFERSIZE 84
+#define TXBUFFERSIZE 16
 #define P_MESSAGEID 0
 #define P_UTCTIME 1
 #define P_STATUS 2
-char serialbuffer[SERIALBUFFERSIZE] = "";
-volatile uint8_t serialbufferindex = 0;
+char serialbuffer[RXBUFFERSIZE] = "";
+volatile uint8_t rxbufferindex = 0;
+char txbuffer[TXBUFFERSIZE] = "";
+volatile uint8_t txbufferindex = 0;
 
 // advance outputs
 #define PIN_ADV_M 14
@@ -143,6 +148,8 @@ inline bool isFlag(uint8_t flag) {
 volatile uint8_t displaymode = MODE_MAIN;
 #define SETTINGCHANGETIMEOUT (5000/TICKRATE/TICKDIV2) // 5 seconds
 volatile uint8_t settingchangetimeout = 0;
+#define ESPTIMEOUT (65000/TICKRATE/256) // timeout before 65 seconds; normally will be clocked by GPS
+volatile uint8_t esptimeout = 0;
 
 // sync states
 #define SYNC_OK 0 // clock has been synchronised and is running
@@ -208,7 +215,7 @@ void setLocalTime(uint8_t hour_utc, uint8_t minute_utc, uint8_t second_utc) {
 }
 
 // drift
-#define DRIFT_HISTORY_LENGTH 144 // 10 min interval for 24h
+#define DRIFT_HISTORY_LENGTH 72 // 10 min interval for 12h
 #define DRIFT_THRESHOLD_WARNING 30 // seconds before drift warning (30 secs)
 #define DRIFT_THRESHOLD_ERROR 1800 // seconds before deciding failed (30 mins)
 int16_t drift_history[DRIFT_HISTORY_LENGTH] = {0};
@@ -239,24 +246,44 @@ int16_t drifthistory_getmaxmagnitude() {
   return max;
 }
 
-void RxInit() {
-  UBRR0H = (uint8_t)(RX_UBRR>>8);
-  UBRR0L = (uint8_t)(RX_UBRR);
-  UCSR0B = (1<<RXEN0)|(1<<RXCIE0);
+void UartInit() {
+  UBRR0H = (uint8_t)(UART_UBRR>>8);
+  UBRR0L = (uint8_t)(UART_UBRR);
+  UCSR0B = (1<<RXEN0)|(1<<RXCIE0)|(1<<TXEN0)|(1<<TXCIE0);
   UCSR0C = (3<<UCSZ00);
 }
 
 ISR(USART_RX_vect) {
   char c = UDR0;
   if (c == '$') {
-    serialbufferindex = 0;
+    rxbufferindex = 0;
   }
-  serialbuffer[serialbufferindex] = c;
-  serialbufferindex++;
-  serialbufferindex%=SERIALBUFFERSIZE;
+  serialbuffer[rxbufferindex] = c;
+  rxbufferindex++;
+  rxbufferindex%=RXBUFFERSIZE;
   if (c == LF) {
     processGPS();
   }
+}
+
+ISR(USART_TX_vect) {
+  if ((txbuffer[txbufferindex] != 0) && (txbufferindex < TXBUFFERSIZE)) {
+    UDR0 = txbuffer[txbufferindex];
+    txbufferindex++;
+  }
+}
+
+void uartSend(char *msg) {
+  //truncate
+  if (strlen(msg) > TXBUFFERSIZE) {
+    msg[TXBUFFERSIZE] = 0;
+  }
+  strcpy(txbuffer, msg);
+  if (UCSR0A && (1<<UDRE0)) { // if data register is ready (no transmission in progress)
+    // start transmission (interrupt will finish)
+    UDR0 = txbuffer[0];
+    txbufferindex = 1;
+  } // otherwise skips the transmission
 }
 
 void setup() {
@@ -339,7 +366,9 @@ void setup() {
   PCMSK0 = 0b0000111; // PCINT 0, 1, 2
   
   // setup serial for GPS
-  RxInit();
+  UartInit();
+
+  doMessage();
 
 }
 
@@ -502,6 +531,7 @@ void displayUpdateTime() {
   char s[] = "00:00:00";
   formatTimeHHMMSS(s, hour_local, minute_local, second_local);
   display.print(s);
+  display.setTextSize(1); // this might come out of an interrupt and cause trouble
   setFlag(FLAG_DISPLAYCHANGE);
 }
 
@@ -520,6 +550,7 @@ void displayUpdateTimezone() {
     char s[] = "00:00";
     formatTimeHHMM(s, abs(tzoffset_minutes)/60, abs(tzoffset_minutes)%60);
     display.print(s);
+    display.setTextSize(1); // this might come out of an interrupt and cause trouble
   }
   // headline timezone display (all screens)
   display.fillRect(96,0,SCREEN_WIDTH-96,16,SSD1306_BLACK);
@@ -672,6 +703,13 @@ void displayDrift() {
   display.setCursor(0, GRAPH_Y0+(GRAPH_HEIGHT/2)-4);
   display.print(F("-"));
   display.print(fullscale/2);
+  // print value next to graph
+  display.setCursor(GRAPH_X0+GRAPH_WIDTH+2,GRAPH_Y0-4);
+  if (drift_current >= 0) {
+    display.print(F("+"));
+  }
+  display.print(drift_current);
+  display.print('s');
   // data
   for (uint8_t i = 0; i < DRIFT_HISTORY_LENGTH; i++) {
     display.drawPixel(GRAPH_X0+(i*GRAPH_WIDTH)/DRIFT_HISTORY_LENGTH,GRAPH_Y0-drifthistory_getat(DRIFT_HISTORY_LENGTH-i-1)*GRAPH_HEIGHT/fullscale,SSD1306_WHITE);
@@ -732,18 +770,20 @@ void displaySync() {
   setFlag(FLAG_DISPLAYCHANGE);
 }
 
+const char format2d[] PROGMEM = "%02d";
+
 void formatTimeHHMMSS(char* buf, uint8_t h, uint8_t m, uint8_t s) {
-  sprintf(&buf[0], "%02d", h);
+  sprintf_P(&buf[0], format2d, h);
   buf[2] = ':';
-  sprintf(&buf[3], "%02d", m);
+  sprintf_P(&buf[3], format2d, m);
   buf[5] = ':';
-  sprintf(&buf[6], "%02d", s);
+  sprintf_P(&buf[6], format2d, s);
 }
 
 void formatTimeHHMM(char* buf, uint8_t h, uint8_t m) {
-  sprintf(&buf[0], "%02d", h);
+  sprintf_P(&buf[0], format2d, h);
   buf[2] = ':';
-  sprintf(&buf[3], "%02d", m);
+  sprintf_P(&buf[3], format2d, m);
 }
 
 void displaySplash() {
@@ -757,6 +797,7 @@ void displaySplash() {
   display.print(F(__DATE__));
   display.setCursor(0,36);
   display.print(F(__TIME__));
+  display.setTextSize(1);
   setFlag(FLAG_DISPLAYCHANGE);
 }
 
@@ -768,7 +809,7 @@ void processGPS() {
     uint8_t oldflags = flags; // to check if we've changed them
     setFlag(FLAG_GPS_COMMS); // have communications with GPS
     gpstimeout = 0;
-    for (uint8_t i = 0; i < serialbufferindex; i++) {
+    for (uint8_t i = 0; i < rxbufferindex; i++) {
       if (serialbuffer[i] == ',') {
         switch (p) {
           case P_UTCTIME:
@@ -778,9 +819,12 @@ void processGPS() {
               uint8_t s = (serialbuffer[i0+5]-'0')*10 + (serialbuffer[i0+6]-'0');
               setLocalTime(h,m,s);
               setFlag(FLAG_GPS_HASTIME);
-              if ((syncstate==SYNC_OK) && (s==0) && (m%10==0)) { // in sync, and it's a 10-minute line
-                drifthistory_append(drift_current); // append last measured drift history
-                displayUpdateDrift();
+              if (s==0) {
+                if ((syncstate==SYNC_OK) && (m%10==0)) { // in sync, and it's a 10-minute line
+                  drifthistory_append(drift_current); // append last measured drift history
+                  displayUpdateDrift();
+                }
+                doMessage(); // 1 minute interval esp messaging
               }
               displayUpdateTime();
             } else {
@@ -818,6 +862,48 @@ void setLamp(uint32_t newcolor, uint8_t newflashsetting) {
 
 inline bool syncRunning() {
   return (bool)((syncstate > SYNC_OK) && (syncstate < SYNC_ERROR));
+}
+
+void doMessage() {
+  char msg[] = "CE00000*00\r\n";
+  if (isFlag(FLAG_GPS_HASFIX)) {
+    msg[0] = 'O';
+  } else if (isFlag(FLAG_GPS_HASTIME)) {
+    msg[0] = 'N';
+  } else if (isFlag(FLAG_GPS_COMMS)) {
+    msg[0] = 'E';
+  } // else default 'C' for comms error
+  if (syncstate == SYNC_OK) {
+    if (isFlag(FLAG_TIME_ERROR)) {
+      msg[1] = 'E'; // sync (time) error
+    } else if (isFlag(FLAG_TIME_DRIFT)) {
+      msg[1] = 'D'; // time drift
+    } else {
+      msg[1] = 'O'; // sync ok
+    }
+  } else if (syncstate < SYNC_ERROR) {
+    msg[1] = 'N'; // no sync or sync not ready yet
+  } // else 'E' (default)
+  if (digitalRead(PIN_RUN_OUT)) {
+    // clock running
+    msg[2] = '1';
+  }
+  // current drift in hex
+  sprintf_P(&msg[3],(const char*)F("%04X"),(uint16_t)drift_current);
+  msg[7] = '*'; // because sprintf adds a null DUH
+  // checksum
+  uint8_t cs = 0;
+  for (uint8_t i = 0; i<strlen(msg); i++) {
+    if (msg[i]=='*') {
+      break;
+    }
+    cs^=msg[i];
+  }
+  sprintf_P(&msg[8],(const char*)F("%02X"),cs);
+  msg[10] = '\r'; // because sprintf adds a null DUH
+  // send
+  uartSend(msg); // send the message on tx
+  esptimeout = 0; // reset esp message timeout
 }
 
 void loop() {
@@ -879,6 +965,11 @@ void loop() {
       // auto sync if conditions right and no sync currently
       if ((syncstate == SYNC_NONE) && isFlag(FLAG_GPS_HASTIME) && isFlag(FLAG_GPS_HASFIX) && isFlag(FLAG_RUN_OK)) {
         syncBegin();
+      }
+      // esp message timeout (if no GPS, still update once every minute or so)
+      esptimeout++;
+      if (esptimeout > ESPTIMEOUT) {
+        doMessage();
       }
     }
   }

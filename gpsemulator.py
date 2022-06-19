@@ -1,5 +1,6 @@
 from cProfile import run
 from operator import xor
+from re import ASCII
 import serial
 import sys
 import datetime
@@ -15,6 +16,7 @@ if __name__ == "__main__":
     ser.port=portname
     ser.rts=0 # don't reset
     ser.dtr=0 # don't reset
+    ser.timeout = 0.5
     print(ser)
     ser.open()
   except:
@@ -42,6 +44,7 @@ if __name__ == "__main__":
         print("Run with offset = {0} seconds".format(offset))
   try:
     lastsecond = -1
+    inbuffer = ""
     while True:
       t = datetime.datetime.utcnow() + datetime.timedelta(seconds=offset)
       if (t.second != lastsecond):
@@ -58,6 +61,10 @@ if __name__ == "__main__":
         msg = "${0}*{1:02X}\r\n".format(body,csum).encode("ASCII")
         print(msg)
         ser.write(msg)
+      s = ""
+      s = ser.read_until('\n')
+      if len(s) > 0:
+        print("received: ", s)
   except KeyboardInterrupt:
       ser.close()
       print("Quitting")
