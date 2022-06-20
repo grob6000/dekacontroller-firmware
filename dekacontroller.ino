@@ -9,6 +9,8 @@
 #include <avr/io.h>
 #include <avr/eeprom.h>
 
+#include "dekacontroller_types.h"
+
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
 #define OLED_RESET -1 // no reset
@@ -79,7 +81,7 @@ void (*debouncefunc[])() = {&button0, &button1, &button2, &button3, &m0low};
 #define CR 0x0D
 #define LF 0x0A
 #define RXBUFFERSIZE 84
-#define MSGLEN 10
+#define MSGLEN 14
 #define TXBUFFERSIZE MSGLEN+6
 #define P_MESSAGEID 0
 #define P_UTCTIME 1
@@ -117,14 +119,14 @@ volatile bool flashon = false;
 #define PIN_RUN_OUT 16
 
 // state variables
-#define FLAG_RUN_OK 0 // set when i know i can control run output
-#define FLAG_GPS_HASTIME 1 // set when last gps message included time
-#define FLAG_GPS_HASFIX 2 // set when last gps message included fix
-#define FLAG_GPS_OLDFIX 3 // set when a gps message since boot included fix
-#define FLAG_GPS_COMMS 4 // set when we've received a gps message in the last few seconds
-#define FLAG_TIME_DRIFT 5 // set when measured drift of clock exceeds threshold
-#define FLAG_TIME_ERROR 6  // set when inputs are inconsistent with tracked time
-#define FLAG_DISPLAYCHANGE 7 // set when there are changes in the display buffer
+//#define FLAG_RUN_OK 0 // set when i know i can control run output
+//#define FLAG_GPS_HASTIME 1 // set when last gps message included time
+//#define FLAG_GPS_HASFIX 2 // set when last gps message included fix
+//#define FLAG_GPS_OLDFIX 3 // set when a gps message since boot included fix
+//#define FLAG_GPS_COMMS 4 // set when we've received a gps message in the last few seconds
+//#define FLAG_TIME_DRIFT 5 // set when measured drift of clock exceeds threshold
+//#define FLAG_TIME_ERROR 6  // set when inputs are inconsistent with tracked time
+//#define FLAG_DISPLAYCHANGE 7 // set when there are changes in the display buffer
 
 /*
 volatile uint8_t flags = 0x00;
@@ -148,7 +150,7 @@ inline bool isFlag(uint8_t flag) {
 //#define MODE_DRIFT 2
 //#define MODE_SYNC 3
 #define MODECOUNT 4
-typedef enum {Main, Timezone, Drift, Sync} DisplayMode;
+//typedef enum {Main, Timezone, Drift, Sync} DisplayMode;
 //volatile uint8_t displaymode = MODE_MAIN;
 //DisplayMode displaymode = Main;
 #define SETTINGCHANGETIMEOUT (5000/TICKRATE/TICKDIV2) // 5 seconds
@@ -168,20 +170,26 @@ volatile uint8_t esptimeout = 0;
 #define SYNC_ERROR 7 // there was an error when attempting to sync; manual intervention expected
 #define SYNC_NONE 8 // no sync (or invalid sync): should automatically resync
 */
-typedef enum {Ok, Begin, ZeroM0, ZeroH, SetH, SetM, WaitMark, Error, None} SyncState;
+//typedef enum {Ok, Begin, ZeroM0, ZeroH, SetH, SetM, WaitMark, Error, None} SyncState;
 //SyncState syncstate = None; // init to no sync
 //volatile uint8_t syncstate = SYNC_NONE; // init to no sync
 
+/*
 typedef struct {
   DisplayMode displaymode : 3;
   bool displaychange : 1;
   SyncState syncstate : 4;
 } ModeStruct;
+*/
 
-ModeStruct mode = {
+volatile ModeStruct mode = {
   .displaymode=Main,
-  .displaychange=false,
   .syncstate=None
+};
+
+volatile ChangeFlags flags = {
+  .displaychange = false,
+  .messagechange = false
 };
 
 const char syncstring0[] PROGMEM = "  OK"; // space to center in 6 chars
@@ -196,6 +204,7 @@ const char str_none[] PROGMEM = " NONE"; // space for 6 chars
 const char* const syncstrings[] PROGMEM = {syncstring0, syncstring1, syncstring2, syncstring3, syncstring4, syncstring5, syncstring6, str_error, str_none};
 
 // bitfield state
+/*
 typedef struct {
   bool run_ok : 1;
   bool gps_hastime : 1;
@@ -206,6 +215,7 @@ typedef struct {
   bool time_error: 1;
   bool displaychange: 1;
 } StatusStruct;
+*/
 
 volatile StatusStruct status = {
   .run_ok=false,
@@ -215,7 +225,6 @@ volatile StatusStruct status = {
   .gps_hascomms=false,
   .time_drift=false,
   .time_error=false,
-  .displaychange=false
 };
 
 // sync parameters
@@ -413,7 +422,7 @@ void setup() {
   // setup serial for GPS
   UartInit();
 
-  doMessage();
+  flags.messagechange = true;
 
 }
 
@@ -531,6 +540,7 @@ void refreshDisplay(void) {
 
 void button3() {
   // no actions for b3
+  syncBegin(); // this button forces a sync
   return;
 }
 
@@ -563,6 +573,7 @@ void m0low() {
       status.time_error = true;
     }
     displayUpdateDrift();
+    flags.messagechange = true;
   }
 }
 
@@ -591,7 +602,7 @@ void displayUpdateTime() {
   formatTimeHHMMSS(s, hour_local, minute_local, second_local);
   display.print(s);
   display.setTextSize(1); // this might come out of an interrupt and cause trouble
-  mode.displaychange = true;
+  flags.displaychange = true;
 }
 
 void displayUpdateTimezone() {
@@ -624,7 +635,7 @@ void displayUpdateTimezone() {
   formatTimeHHMM(s, abs(tzoffset_minutes)/60, abs(tzoffset_minutes)%60);
   display.setCursor(97,8);
   display.print(s);
-  mode.displaychange = true;
+  flags.displaychange = true;
 }
 
 void displayTimezoneEdit() {
@@ -635,7 +646,7 @@ void displayTimezoneEdit() {
   display.print(F("UP/DN TO SET OFFSET:"));
   displayUpdateTime();
   displayUpdateTimezone();
-  mode.displaychange = true;
+  flags.displaychange = true;
 }
 
 void displayUpdateGPS() {
@@ -666,7 +677,7 @@ void displayUpdateGPS() {
     if (invert) {
       display.fillRect(GPS_CARD_X0+1,GPS_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SSD1306_INVERSE);
     }
-    mode.displaychange = true;
+    flags.displaychange = true;
   }
 }
 
@@ -686,7 +697,7 @@ void displayUpdateRun() {
       display.print(F("ERROR"));
       display.fillRect(RUN_CARD_X0+1,RUN_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SSD1306_INVERSE);
     }
-    mode.displaychange = true;
+    flags.displaychange = true;
   }  
 }
 
@@ -735,7 +746,7 @@ void displayUpdateDrift() {
     if (status.time_error || status.time_drift) {
       display.fillRect(DRIFT_CARD_X0+1,DRIFT_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SSD1306_INVERSE);
     }    
-    mode.displaychange = true;    
+    flags.displaychange = true;    
   }
 }
 
@@ -777,7 +788,7 @@ void displayDrift() {
   displayUpdateTime();
   displayUpdateTimezone();
   // update
-  mode.displaychange = true;
+  flags.displaychange = true;
 }
 
 
@@ -794,7 +805,7 @@ void displayUpdateSync() {
       formatTimeHHMM(s, marktime/60, marktime%60);
       display.print(s);
     }
-    mode.displaychange = true;
+    flags.displaychange = true;
   } else if (mode.displaymode == Main) {
     // sync card
     display.fillRect(SYNC_CARD_X0, SYNC_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_BLACK);
@@ -807,7 +818,7 @@ void displayUpdateSync() {
     if (mode.syncstate != Ok) {
       display.fillRect(SYNC_CARD_X0+1,SYNC_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SSD1306_INVERSE);
     }
-    mode.displaychange = true;
+    flags.displaychange = true;
   }
 }
 
@@ -826,7 +837,7 @@ void displaySync() {
   displayUpdateTime();
   displayUpdateTimezone();
   // update
-  mode.displaychange = true;
+  flags.displaychange = true;
 }
 
 const char format2d[] PROGMEM = "%02d";
@@ -857,7 +868,7 @@ void displaySplash() {
   display.setCursor(0,36);
   display.print(F(__TIME__));
   display.setTextSize(1);
-  mode.displaychange = true;
+  flags.displaychange = true;
 }
 
 void processGPS() {
@@ -884,7 +895,7 @@ void processGPS() {
                   drifthistory_append(drift_current); // append last measured drift history
                   displayUpdateDrift();
                 }
-                doMessage(); // 1 minute interval esp messaging
+                flags.messagechange = true; // 1 minute interval esp messaging
               }
               displayUpdateTime();
             } else {
@@ -906,6 +917,7 @@ void processGPS() {
         // check if any flags were altered, in which case update gps tile
         if (madechanges) {
           displayUpdateGPS();
+          flags.messagechange = true;
         }
         i0 = i;
         p++;
@@ -915,12 +927,12 @@ void processGPS() {
 }
 
 void setLamp(uint32_t newcolor, uint8_t newflashsetting) {
-    if ((newflashsetting == 0) && ((newcolor != lampcolor) || (flashsetting != 0))) { // change, and new color is constant
-      pixels.setPixelColor(0,newcolor);
-      pixels.show();
-    }
-    lampcolor = newcolor;
-    flashsetting = newflashsetting;
+  if ((newflashsetting == 0) && ((newcolor != lampcolor) || (flashsetting != 0))) { // change, and new color is constant
+    pixels.setPixelColor(0,newcolor);
+    pixels.show();
+  }
+  lampcolor = newcolor;
+  flashsetting = newflashsetting;
 }
 
 inline bool syncRunning() {
@@ -929,23 +941,25 @@ inline bool syncRunning() {
 
 void doMessage() {
   // new message format
-  // [status][mode][is][drift]*[csum]
-  char msg[] = "0000000000*00\r\n";
+  // [status.02x][mode.02x][io.02x][drift.04x][offset.04x]*[csum]
+  char msg[] = "00000000000000*00\r\n";
   // status
   sprintf_P(&msg[0],(const char*)F("%02X"),*((uint8_t*)&status));
   // mode
   sprintf_P(&msg[2],(const char*)F("%02X"),*((uint8_t*)&mode));
   // io
   uint8_t io = 0;
-  if (digitalRead(PIN_M0)) {io |= (1<<0);}
-  if (digitalRead(PIN_M00)) {io |= (1<<1);}
-  if (digitalRead(PIN_H0)) {io |= (1<<2);}
-  if (digitalRead(PIN_H00)) {io |= (1<<3);}
+  if (!digitalRead(PIN_M0)) {io |= (1<<0);}
+  if (!digitalRead(PIN_M00)) {io |= (1<<1);}
+  if (!digitalRead(PIN_H0)) {io |= (1<<2);}
+  if (!digitalRead(PIN_H00)) {io |= (1<<3);}
   if (digitalRead(PIN_RUN_OUT)) {io |= (1<<4);}
   if (digitalRead(PIN_RUN_IN)) {io |= (1<<5);}
   sprintf_P(&msg[4],(const char*)F("%02X"),io);  
   // drift
   sprintf_P(&msg[6],(const char*)F("%04X"),(uint16_t)drift_current);
+  // offset
+  sprintf_P(&msg[10],(const char*)F("%04X"),(uint16_t)tzoffset_minutes);
 
   // checksum
   msg[MSGLEN] = '*'; // because sprintf adds a null
@@ -977,8 +991,19 @@ void loop() {
         if (oldvalue != tzoffset_minutes) {
           eeprom_write_word(&tzoffset_ee, tzoffset_minutes);
           mode.syncstate = None; // this will automatically resync the clock
+          flags.messagechange = true;
         }
       }
+    }
+    // if message content has changed, send a message
+    if (flags.messagechange) {
+      doMessage();
+      flags.messagechange = false;
+    }
+    // if pending display update, update the display
+    if (flags.displaychange) {
+      display.display();
+      flags.displaychange = false;
     }
     if (subdiv%TICKDIV2==0) {
       // update LED status
@@ -1007,6 +1032,7 @@ void loop() {
           displayUpdateSync();
         }
         displayUpdateGPS();
+        flags.messagechange = true;
       } else {
         gpstimeout++;
       }
@@ -1028,7 +1054,8 @@ void loop() {
       // esp message timeout (if no GPS, still update once every minute or so)
       esptimeout++;
       if (esptimeout > ESPTIMEOUT) {
-        doMessage();
+        esptimeout = 0;
+        flags.messagechange = true;
       }
     }
   }
@@ -1055,11 +1082,6 @@ void loop() {
       }
     }
   }
-  // if pending display update, update the display
-  if (mode.displaychange) {
-    display.display();
-    mode.displaychange = false;
-  }
   // sync process
   if (syncRunning()) {
     if (ticker_adv == 0) { // reset advance pins (low --> inactive)
@@ -1083,6 +1105,7 @@ void loop() {
                 status.run_ok = false;
                 displayUpdateSync();
                 displayUpdateRun();
+                flags.messagechange = true;
               }
               ticker_sync = SYNC_RUNRETRYTICKS; // 100ms until resample
             } else {
@@ -1091,12 +1114,14 @@ void loop() {
               mode.syncstate = ZeroM0;
               displayUpdateSync();
               displayUpdateRun();
+              flags.messagechange = true;
               timeoutcount = 0; // reset for use as zero limiter
             }
           } else {
             // gps time is no good; go to error rather than start the sync
             mode.syncstate = Error;
             displayUpdateSync();
+            flags.messagechange = true;
           }
           break;
         case ZeroM0:
@@ -1106,6 +1131,7 @@ void loop() {
               // too many presses; error!
               mode.syncstate = Error;
               displayUpdateSync();
+              flags.messagechange = true;
             } else {
               // press the advance button
               digitalWrite(PIN_ADV_M, 1); // high --> active
@@ -1116,6 +1142,7 @@ void loop() {
             // low = M0 is zero
             mode.syncstate = ZeroH; // continue on next tick
             displayUpdateSync();
+            flags.messagechange = true;
             timeoutcount = 0;
           }
           break;
@@ -1126,6 +1153,7 @@ void loop() {
               // too many presses; error!
               mode.syncstate = Error;
               displayUpdateSync();
+              flags.messagechange = true;
             } else {
               digitalWrite(PIN_ADV_H, 1); // high --> active
               ticker_adv = SYNC_PULSETICKS; // pulse
@@ -1143,6 +1171,7 @@ void loop() {
             advcount = marktime / 60; // number of presses = hour
             mode.syncstate = SetH; // continue on next tick
             displayUpdateSync();
+            flags.messagechange = true;
             timeoutcount = 0; // not sure whether i'll need this again, but zero anyway
           }
           break;
@@ -1151,6 +1180,7 @@ void loop() {
             advcount = marktime % 60; // number of presses = minute
             mode.syncstate = SetM;
             displayUpdateSync();
+            flags.messagechange = true;
           } else {
             advcount--;
             digitalWrite(PIN_ADV_H, 1); // high --> active
@@ -1162,6 +1192,7 @@ void loop() {
           if (advcount == 0) {
             mode.syncstate = WaitMark;
             displayUpdateSync();
+            flags.messagechange = true;
           } else {
             advcount--;
             digitalWrite(PIN_ADV_M, 1); // high --> active
@@ -1176,6 +1207,7 @@ void loop() {
             status.time_error = false; // clear only when sync successful
             mode.syncstate = Ok;
             displayUpdateSync();
+            flags.messagechange = true;
           }
           break;
         case Ok:
