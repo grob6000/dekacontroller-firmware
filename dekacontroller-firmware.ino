@@ -121,69 +121,10 @@ volatile bool flashon = false;
 #define PIN_RUN_IN 6
 #define PIN_RUN_OUT 16
 
-// state variables
-//#define FLAG_RUN_OK 0 // set when i know i can control run output
-//#define FLAG_GPS_HASTIME 1 // set when last gps message included time
-//#define FLAG_GPS_HASFIX 2 // set when last gps message included fix
-//#define FLAG_GPS_OLDFIX 3 // set when a gps message since boot included fix
-//#define FLAG_GPS_COMMS 4 // set when we've received a gps message in the last few seconds
-//#define FLAG_TIME_DRIFT 5 // set when measured drift of clock exceeds threshold
-//#define FLAG_TIME_ERROR 6  // set when inputs are inconsistent with tracked time
-//#define FLAG_DISPLAYCHANGE 7 // set when there are changes in the display buffer
-
-/*
-volatile uint8_t flags = 0x00;
-
-inline void setFlag(uint8_t flag) {
-  flags |= (1<<flag);
-}
-
-inline void clearFlag(uint8_t flag) {
-  flags &= ~(1<<flag);
-}
-
-inline bool isFlag(uint8_t flag) {
-  return (bool)(flags & (1<<flag));
-}
-*/
-
-// display modes
-//#define MODE_MAIN 0
-//#define MODE_TIME 1
-//#define MODE_DRIFT 2
-//#define MODE_SYNC 3
-#define MODECOUNT 4
-//typedef enum {Main, Timezone, Drift, Sync} DisplayMode;
-//volatile uint8_t displaymode = MODE_MAIN;
-//DisplayMode displaymode = Main;
 #define SETTINGCHANGETIMEOUT (5000/TICKRATE/TICKDIV2) // 5 seconds
 volatile uint8_t settingchangetimeout = 0;
 #define ESPTIMEOUT (65000/TICKRATE/256) // timeout before 65 seconds; normally will be clocked by GPS
 volatile uint8_t esptimeout = 0;
-
-// sync states
-/*
-#define SYNC_OK 0 // clock has been synchronised and is running
-#define SYNC_BEGIN 1 // sync is beginning
-#define SYNC_ZERO_M0 2 // return M0 to zero (M00 will be zeroed by h advance)
-#define SYNC_ZERO_H 3 // return H0 and H00 to zero
-#define SYNC_SET_H 4 // set H to value
-#define SYNC_SET_M 5 // set M to value
-#define SYNC_WAITMARK 6 // wait for mark time to hit run
-#define SYNC_ERROR 7 // there was an error when attempting to sync; manual intervention expected
-#define SYNC_NONE 8 // no sync (or invalid sync): should automatically resync
-*/
-//typedef enum {Ok, Begin, ZeroM0, ZeroH, SetH, SetM, WaitMark, Error, None} SyncState;
-//SyncState syncstate = None; // init to no sync
-//volatile uint8_t syncstate = SYNC_NONE; // init to no sync
-
-/*
-typedef struct {
-  DisplayMode displaymode : 3;
-  bool displaychange : 1;
-  SyncState syncstate : 4;
-} ModeStruct;
-*/
 
 volatile ModeStruct mode = {
   .displaymode=Main,
@@ -205,20 +146,6 @@ const char syncstring6[] PROGMEM = " WAIT"; // space to center in 6 chars
 const char str_error[] PROGMEM = "ERROR";
 const char str_none[] PROGMEM = " NONE"; // space for 6 chars
 const char* const syncstrings[] PROGMEM = {syncstring0, syncstring1, syncstring2, syncstring3, syncstring4, syncstring5, syncstring6, str_error, str_none};
-
-// bitfield state
-/*
-typedef struct {
-  bool run_ok : 1;
-  bool gps_hastime : 1;
-  bool gps_hasfix : 1;
-  bool gps_oldfix : 1;
-  bool gps_hascomms : 1;
-  bool time_drift : 1;
-  bool time_error: 1;
-  bool displaychange: 1;
-} StatusStruct;
-*/
 
 volatile StatusStruct status = {
   .run_ok=false,

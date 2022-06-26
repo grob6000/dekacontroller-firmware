@@ -2,6 +2,7 @@
 
 typedef enum {Ok, Begin, ZeroM0, ZeroH, SetH, SetM, WaitMark, Error, None} SyncState;
 typedef enum {Main, Timezone, Drift, Sync} DisplayMode;
+#define MODECOUNT 4
 
 typedef struct {
   DisplayMode displaymode : 2;
