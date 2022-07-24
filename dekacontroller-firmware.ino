@@ -1094,25 +1094,23 @@ void loop() {
     } else {
       ticker_sync--;
     }
-
-    // if message content has changed, send a message
-    if (flags.forcemessage || flags.driftchange || flags.gpschange || flags.runchange || flags.syncchange) {
-      doMessage();
-    }
-    // if any flags are set, update display
-    if (flags.displayrefresh || flags.timechange || flags.driftchange || flags.gpschange || flags.runchange || flags.syncchange || flags.tzchange) {
-      refreshDisplay();
-    }
-
-    // reset all flags
-    flags.displayrefresh = false;
-    flags.driftchange = false;
-    flags.forcemessage = false;
-    flags.gpschange = false;
-    flags.runchange = false;
-    flags.syncchange = false;
-    flags.timechange = false;
-    flags.tzchange = false;
-
   }
+  // if message content has changed, send a message
+  if (flags.forcemessage || flags.driftchange || flags.gpschange || flags.runchange || flags.syncchange) {
+    doMessage();
+  }
+  // if any flags are set, update display
+  if (flags.displayrefresh || flags.timechange || flags.driftchange || flags.gpschange || flags.runchange || flags.syncchange || flags.tzchange) {
+    refreshDisplay();
+  }
+
+  // reset all flags
+  flags.displayrefresh = false;
+  flags.driftchange = false;
+  flags.forcemessage = false;
+  flags.gpschange = false;
+  flags.runchange = false;
+  flags.syncchange = false;
+  flags.timechange = false;
+  flags.tzchange = false;
 }
