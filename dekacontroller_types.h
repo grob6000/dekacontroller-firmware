@@ -10,8 +10,14 @@ typedef struct {
 } ModeStruct;
 
 typedef struct {
-  bool displaychange : 1;
-  bool messagechange : 1;
+  bool displayrefresh : 1;
+  bool forcemessage : 1;
+  bool timechange : 1;
+  bool gpschange : 1;
+  bool tzchange : 1;
+  bool syncchange : 1;
+  bool driftchange : 1;
+  bool runchange : 1;
 } ChangeFlags;
 
 typedef struct {
