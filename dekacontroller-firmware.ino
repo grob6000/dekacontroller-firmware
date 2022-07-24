@@ -2,9 +2,8 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <pins_arduino.h>
-#define SSD1306_NO_SPLASH
 #include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <Adafruit_SH110X.h>
 #include <avr/interrupt.h>
 #include <avr/io.h>
 #include <avr/eeprom.h>
@@ -18,8 +17,9 @@
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
 #define OLED_RESET -1 // no reset
 #define SCREEN_ADDRESS 0x3C
+volatile bool displaybusy = false; // don't modify the buffer while the display routine is running
 
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET, 500000L, 500000L);
 #define DATAX 45
 #define TIME_DATAX DATAX
 #define SYNC_DATAX DATAX
@@ -31,15 +31,17 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define ICON_WIDTH    16
 
 // card dimensions
-#define CARD_WIDTH 40
+#define CARD_WIDTH 52
 #define CARD_WIDTH_DOUBLE ((CARD_WIDTH*2)+CARD_MARGIN)
 #define CARD_HEIGHT 21
-#define CARD_MARGIN 2
-#define CARD_X0_0 CARD_MARGIN
-#define CARD_X0_1 ((CARD_MARGIN*2)+CARD_WIDTH)
-#define CARD_X0_2 ((CARD_MARGIN*3)+(CARD_WIDTH*2))
+#define CARD_MARGIN 2 // margin between cards
+#define CARD_X0_0 ((SCREEN_WIDTH - CARD_WIDTH*2 - CARD_MARGIN*1)/2)
+#define CARD_X0_1 (CARD_X0_0 + CARD_WIDTH + CARD_MARGIN)
+//#define CARD_X0_2 (CARD_X0_1 + CARD_WIDTH + CARD_MARGIN)
 #define CARD_Y0_0 (16+CARD_MARGIN)
-#define CARD_Y0_1 (16+(CARD_MARGIN*2)+CARD_HEIGHT)
+#define CARD_Y0_1 (CARD_Y0_0 + CARD_HEIGHT + CARD_MARGIN)
+#define CARD_PAD 2 // internal padding of card
+#define CARD_MAX_CHARS ((CARD_WIDTH - (CARD_PAD*2)) / 6)
 
 // specific cards
 #define GPS_CARD_X0 CARD_X0_0
@@ -136,15 +138,15 @@ volatile ChangeFlags flags = {
   .messagechange = false
 };
 
-const char syncstring0[] PROGMEM = "  OK"; // space to center in 6 chars
+const char syncstring0[] PROGMEM = "SYNC";
 const char syncstring1[] PROGMEM = "BEGIN";
-const char syncstring2[] PROGMEM = "ZERO M";
-const char syncstring3[] PROGMEM = "ZERO H";
-const char syncstring4[] PROGMEM = "SET H";
-const char syncstring5[] PROGMEM = "SET M";
-const char syncstring6[] PROGMEM = " WAIT"; // space to center in 6 chars
+const char syncstring2[] PROGMEM = "ZERO MIN";
+const char syncstring3[] PROGMEM = "ZERO HR";
+const char syncstring4[] PROGMEM = "SET HR";
+const char syncstring5[] PROGMEM = "SET MIN";
+const char syncstring6[] PROGMEM = "WAIT MK";
 const char str_error[] PROGMEM = "ERROR";
-const char str_none[] PROGMEM = " NONE"; // space for 6 chars
+const char str_none[] PROGMEM = "NONE";
 const char* const syncstrings[] PROGMEM = {syncstring0, syncstring1, syncstring2, syncstring3, syncstring4, syncstring5, syncstring6, str_error, str_none};
 
 volatile StatusStruct status = {
@@ -199,7 +201,7 @@ void setLocalTime(uint8_t hour_utc, uint8_t minute_utc, uint8_t second_utc) {
 }
 
 // drift
-#define DRIFT_HISTORY_LENGTH 72 // 10 min interval for 12h
+#define DRIFT_HISTORY_LENGTH 24 // 10 min interval for 6h
 #define DRIFT_THRESHOLD_WARNING 30 // seconds before drift warning (30 secs)
 #define DRIFT_THRESHOLD_ERROR 1800 // seconds before deciding failed (30 mins)
 int16_t drift_history[DRIFT_HISTORY_LENGTH] = {0};
@@ -297,17 +299,21 @@ void setup() {
   pixels.clear();
 
   // setup display
-  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
-  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-    // set LED to red (solid) and then block
-    pixels.setPixelColor(0, pixels.Color(255,0,0));
-    pixels.show();
-    for(;;);
+  // SH110X_SWITCHCAPVCC = generate display voltage from 3.3V internally
+  if(!display.begin(SCREEN_ADDRESS, false)) {
+    // failed display - alternate red/orange flash and block
+    for (;;) {
+      pixels.setPixelColor(0, pixels.Color(255,0,0));
+      pixels.show();
+      _delay_ms(200);
+      pixels.setPixelColor(0, pixels.Color(255,255,0));
+      pixels.show();
+      _delay_ms(200);
+    }
   }
 
   // splash
   displaySplash();
-  display.display(); // force update display (loop including updated not yet be running)
   // LED startup
   pixels.setPixelColor(0, pixels.Color(0,0,0));
   pixels.show();
@@ -523,9 +529,56 @@ void tz_decrease() {
   settingchangetimeout = SETTINGCHANGETIMEOUT;
 }
 
+void drawCard(uint8_t x0, uint8_t y0, const __FlashStringHelper *strtop, char *strbottom, bool highlight = false) {
+    // clear and draw card
+    display.fillRect(x0, y0,CARD_WIDTH,CARD_HEIGHT,SH110X_BLACK);
+    display.drawRect(x0, y0,CARD_WIDTH,CARD_HEIGHT,SH110X_WHITE);
+    
+    display.setTextSize(1);
+    char tempstr[CARD_MAX_CHARS+1] = "";
+
+    // print top string
+    PGM_P p = reinterpret_cast<PGM_P>(strtop);
+    size_t n;
+    for (n = 0; n < CARD_MAX_CHARS; n++) {
+      unsigned char c = pgm_read_byte(p++);
+      tempstr[n] = c;
+      if (c == 0) break;
+    }
+    display.setCursor(x0+(CARD_WIDTH/2)-(n*3), y0+CARD_PAD);
+    display.print(tempstr);
+
+    // print bottom string
+    for (n = 0; n < CARD_MAX_CHARS; n++) {
+      unsigned char c = strbottom[n];
+      tempstr[n] = c;
+      if (c == 0) break;
+    }
+    display.setCursor(x0+(CARD_WIDTH/2)-(n*3), y0+CARD_PAD+9);
+    display.print(tempstr);    
+
+    // invert card body if highlighted
+    if (highlight) {
+      display.fillRect(x0+1,y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SH110X_INVERSE);
+    }
+}
+
+void drawCard2(uint8_t x0, uint8_t y0, const __FlashStringHelper *strtop, __FlashStringHelper *strbottom, bool highlight = false) {
+    char tempstr[CARD_MAX_CHARS+1] = "";
+    PGM_P p = reinterpret_cast<PGM_P>(strbottom);
+    size_t n;
+    for (n = 0; n < CARD_MAX_CHARS; n++) {
+      unsigned char c = pgm_read_byte(p++);
+      tempstr[n] = c;
+      if (c == 0) break;
+    }
+    drawCard(x0, y0, strtop, tempstr, highlight);
+}
+
 void displayUpdateTime() {
+  if (displaybusy) { return; } // bail if display is currently writing
   // update big time in header row (all screens)
-  display.fillRect(0,0,96,16,SSD1306_BLACK);
+  display.fillRect(0,0,96,16,SH110X_BLACK);
   display.setCursor(0,0);
   display.setTextSize(2);
   char s[] = "00:00:00";
@@ -536,10 +589,10 @@ void displayUpdateTime() {
 }
 
 void displayUpdateTimezone() {
- 
+  if (displaybusy) { return; } // bail if display is currently writing
   if (mode.displaymode == Timezone) {
     // update big timezone
-    display.fillRect(0,40,SCREEN_WIDTH,SCREEN_HEIGHT-40,SSD1306_BLACK);
+    display.fillRect(0,40,SCREEN_WIDTH,SCREEN_HEIGHT-40,SH110X_BLACK);
     display.setTextSize(2);
     display.setCursor(28,40);
     if (tzoffset_minutes >= 0) {
@@ -553,7 +606,7 @@ void displayUpdateTimezone() {
     display.setTextSize(1); // this might come out of an interrupt and cause trouble
   }
   // headline timezone display (all screens)
-  display.fillRect(96,0,SCREEN_WIDTH-96,16,SSD1306_BLACK);
+  display.fillRect(96,0,SCREEN_WIDTH-96,16,SH110X_BLACK);
   display.setCursor(100,0);
   display.setTextSize(1);
   if (tzoffset_minutes >= 0) {
@@ -569,6 +622,7 @@ void displayUpdateTimezone() {
 }
 
 void displayTimezoneEdit() {
+  if (displaybusy) { return; } // bail if display is currently writing
   // update timezone editor display
   display.clearDisplay();
   display.setCursor(4,25);
@@ -580,58 +634,66 @@ void displayTimezoneEdit() {
 }
 
 void displayUpdateGPS() {
+  if (displaybusy) { return; } // bail if display is currently writing
   if (mode.displaymode == Main) {
     // gps card
-    display.fillRect(GPS_CARD_X0, GPS_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_BLACK);
-    display.drawRect(GPS_CARD_X0, GPS_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_WHITE);
-    display.setTextSize(1);
-    display.setCursor(GPS_CARD_X0+11, GPS_CARD_Y0+2);
-    display.print(F("GPS"));
-    bool invert = true;
+    //display.fillRect(GPS_CARD_X0, GPS_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SH110X_BLACK);
+    //display.drawRect(GPS_CARD_X0, GPS_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SH110X_WHITE);
+    //display.setTextSize(1);
+    //display.setCursor(GPS_CARD_X0+11, GPS_CARD_Y0+2);
+    //display.print(F("GPS"));
+    //bool invert = true;
     if (status.gps_hastime) {
       if (status.gps_hasfix) {
-        display.setCursor(GPS_CARD_X0+2+12, GPS_CARD_Y0+11);
-        display.print(F("OK"));
-        invert=false;
+        drawCard2(GPS_CARD_X0, GPS_CARD_Y0, F("GPS"), F("OK"), false);
+        //display.setCursor(GPS_CARD_X0+2+12, GPS_CARD_Y0+11);
+        //display.print(F("OK"));
+        //invert=false;
       } else {
-        display.setCursor(GPS_CARD_X0+2+3, GPS_CARD_Y0+11);
-        display.print(F("NOFIX"));
+        drawCard2(GPS_CARD_X0, GPS_CARD_Y0, F("GPS"), F("NOFIX"), true);
+        //display.setCursor(GPS_CARD_X0+2+3, GPS_CARD_Y0+11);
+        //display.print(F("NOFIX"));
       }
     } else if (status.gps_hascomms) {
-      display.setCursor(GPS_CARD_X0+2+3, GPS_CARD_Y0+11);
-      display.print(F("INIT"));
+      drawCard2(GPS_CARD_X0, GPS_CARD_Y0, F("GPS"), F("INIT"), true);
+      //display.setCursor(GPS_CARD_X0+2+3, GPS_CARD_Y0+11);
+      //display.print(F("INIT"));
     } else {
-      display.setCursor(GPS_CARD_X0+2+3, GPS_CARD_Y0+11);
-      display.print(F("COMMS"));      
+      drawCard2(GPS_CARD_X0, GPS_CARD_Y0, F("GPS"), F("COMMS"), true);
+      //display.setCursor(GPS_CARD_X0+2+3, GPS_CARD_Y0+11);
+      //display.print(F("COMMS"));      
     }
-    if (invert) {
-      display.fillRect(GPS_CARD_X0+1,GPS_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SSD1306_INVERSE);
-    }
+    //if (invert) {
+    //  display.fillRect(GPS_CARD_X0+1,GPS_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SH110X_INVERSE);
+    //}
     flags.displaychange = true;
   }
 }
 
 void displayUpdateRun() {
   if (mode.displaymode == Main) {
-    // gps card
-    display.fillRect(RUN_CARD_X0, RUN_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_BLACK);
-    display.drawRect(RUN_CARD_X0, RUN_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_WHITE);
-    display.setTextSize(1);
-    display.setCursor(RUN_CARD_X0+11, RUN_CARD_Y0+2);
-    display.print(F("RUN"));
+    // run card
+    //display.fillRect(RUN_CARD_X0, RUN_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SH110X_BLACK);
+    //display.drawRect(RUN_CARD_X0, RUN_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SH110X_WHITE);
+    //display.setTextSize(1);
+    //display.setCursor(RUN_CARD_X0+11, RUN_CARD_Y0+2);
+    //display.print(F("RUN"));
     if (status.run_ok) {
-      display.setCursor(RUN_CARD_X0+2+12, RUN_CARD_Y0+11);
-      display.print(F("OK"));
+      drawCard2(RUN_CARD_X0, RUN_CARD_Y0, F("RUN"), F("OK"), false);
+      //display.setCursor(RUN_CARD_X0+2+12, RUN_CARD_Y0+11);
+      //display.print(F("OK"));
     } else {
-      display.setCursor(RUN_CARD_X0+2+3, RUN_CARD_Y0+11);
-      display.print(F("ERROR"));
-      display.fillRect(RUN_CARD_X0+1,RUN_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SSD1306_INVERSE);
+      drawCard2(RUN_CARD_X0, RUN_CARD_Y0, F("RUN"), F("ERROR"), true);
+      //display.setCursor(RUN_CARD_X0+2+3, RUN_CARD_Y0+11);
+      //display.print(F("ERROR"));
+      //display.fillRect(RUN_CARD_X0+1,RUN_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SH110X_INVERSE);
     }
     flags.displaychange = true;
   }  
 }
 
 void displayMain() {
+  if (displaybusy) { return; } // bail if display is currently writing
   display.clearDisplay();
   displayUpdateTime(); // draw headline time
   displayUpdateTimezone(); // draw headline timezone
@@ -643,19 +705,22 @@ void displayMain() {
 
 
 void displayUpdateDrift() {
+  if (displaybusy) { return; } // bail if display is currently writing
   if (mode.displaymode == Drift) {
     displayDrift(); // just do the whole schebang
   } else if (mode.displaymode == Main) {
     // drift card
-    display.fillRect(DRIFT_CARD_X0, DRIFT_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_BLACK);
-    display.drawRect(DRIFT_CARD_X0, DRIFT_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_WHITE);
-    display.setTextSize(1);
-    display.setCursor(DRIFT_CARD_X0+2+3, DRIFT_CARD_Y0+2);
-    display.print(F("TRACK"));
+    //display.fillRect(DRIFT_CARD_X0, DRIFT_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SH110X_BLACK);
+    //display.drawRect(DRIFT_CARD_X0, DRIFT_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SH110X_WHITE);
+    //display.setTextSize(1);
+    //display.setCursor(DRIFT_CARD_X0+2+3, DRIFT_CARD_Y0+2);
+    //display.print(F("TRACK"));
     if (status.time_error) {
-      display.setCursor(DRIFT_CARD_X0+2+3, DRIFT_CARD_Y0+11);
-      display.print(F("ERROR"));
+      //display.setCursor(DRIFT_CARD_X0+2+3, DRIFT_CARD_Y0+11);
+      //display.print(F("ERROR"));
+      drawCard2(DRIFT_CARD_X0, DRIFT_CARD_Y0, F("DRIFT"), F("ERROR"), false);
     } else {
+      /*
       uint8_t offset = 9;
       if (abs(drift_current) >= 10) {
         offset = 6;
@@ -666,30 +731,32 @@ void displayUpdateDrift() {
           }
         }
       }
-      display.setCursor(DRIFT_CARD_X0+2+offset, DRIFT_CARD_Y0+11);
-      if (drift_current >= 0) {
-        display.print("+");
-      }
-      display.print(drift_current);
-      display.print("s");
+      */
+      //display.setCursor(DRIFT_CARD_X0+2+offset, DRIFT_CARD_Y0+11);
+      char driftstr[CARD_MAX_CHARS+1] = "";
+      snprintf_P(driftstr, CARD_MAX_CHARS+1, PSTR("%+d"), drift_current);
+      drawCard(DRIFT_CARD_X0, DRIFT_CARD_Y0, F("DRIFT"), driftstr, false);
     }
+    /*
     if (status.time_error || status.time_drift) {
-      display.fillRect(DRIFT_CARD_X0+1,DRIFT_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SSD1306_INVERSE);
-    }    
+      display.fillRect(DRIFT_CARD_X0+1,DRIFT_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SH110X_INVERSE);
+    } 
+    */   
     flags.displaychange = true;    
   }
 }
 
 void displayDrift() {
+  if (displaybusy) { return; } // bail if display is currently writing
   display.clearDisplay();
   // determine scale
   int16_t fullscale = (drifthistory_getmaxmagnitude()/20 + 1)*20;
   // graph
-  display.drawFastVLine(GRAPH_X0, GRAPH_Y0-GRAPH_HEIGHT-2,GRAPH_Y0+GRAPH_HEIGHT+2,SSD1306_WHITE); // vertical axis
-  display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0-GRAPH_HEIGHT,2,SSD1306_WHITE); // top tick
-  display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0+GRAPH_HEIGHT,2,SSD1306_WHITE); // bottom tick
-  display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0-(GRAPH_HEIGHT/2),2,SSD1306_WHITE); // top intermediate tick
-  display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0+(GRAPH_HEIGHT/2),2,SSD1306_WHITE); // bottom intermediate tick  
+  display.drawFastVLine(GRAPH_X0, GRAPH_Y0-GRAPH_HEIGHT-2,GRAPH_Y0+GRAPH_HEIGHT+2,SH110X_WHITE); // vertical axis
+  display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0-GRAPH_HEIGHT,2,SH110X_WHITE); // top tick
+  display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0+GRAPH_HEIGHT,2,SH110X_WHITE); // bottom tick
+  display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0-(GRAPH_HEIGHT/2),2,SH110X_WHITE); // top intermediate tick
+  display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0+(GRAPH_HEIGHT/2),2,SH110X_WHITE); // bottom intermediate tick  
   display.setTextSize(1);
   display.setCursor(0, GRAPH_Y0-GRAPH_HEIGHT-4);
   display.print(F("+"));
@@ -712,7 +779,7 @@ void displayDrift() {
   display.print('s');
   // data
   for (uint8_t i = 0; i < DRIFT_HISTORY_LENGTH; i++) {
-    display.drawPixel(GRAPH_X0+(i*GRAPH_WIDTH)/DRIFT_HISTORY_LENGTH,GRAPH_Y0-drifthistory_getat(DRIFT_HISTORY_LENGTH-i-1)*GRAPH_HEIGHT/fullscale,SSD1306_WHITE);
+    display.drawPixel(GRAPH_X0+(i*GRAPH_WIDTH)/DRIFT_HISTORY_LENGTH,GRAPH_Y0-drifthistory_getat(DRIFT_HISTORY_LENGTH-i-1)*GRAPH_HEIGHT/fullscale,SH110X_WHITE);
   }
   // update data
   displayUpdateTime();
@@ -724,8 +791,9 @@ void displayDrift() {
 
 
 void displayUpdateSync() {
+  if (displaybusy) { return; } // bail if display is currently writing
   if (mode.displaymode == Sync) { // only update if in the correct mode
-    display.fillRect(DATAX, 40, SCREEN_WIDTH-DATAX,18,SSD1306_BLACK);
+    display.fillRect(DATAX, 40, SCREEN_WIDTH-DATAX,18,SH110X_BLACK);
     display.setCursor(DATAX, 40);
     display.setTextSize(1);
     display.print((__FlashStringHelper *)pgm_read_word(&syncstrings[mode.syncstate]));
@@ -738,21 +806,23 @@ void displayUpdateSync() {
     flags.displaychange = true;
   } else if (mode.displaymode == Main) {
     // sync card
-    display.fillRect(SYNC_CARD_X0, SYNC_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_BLACK);
-    display.drawRect(SYNC_CARD_X0, SYNC_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SSD1306_WHITE);
-    display.setTextSize(1);
-    display.setCursor(SYNC_CARD_X0+2+6, SYNC_CARD_Y0+2);
-    display.print(F("SYNC"));
-    display.setCursor(SYNC_CARD_X0+2, SYNC_CARD_Y0+11);
-    display.print((__FlashStringHelper *)pgm_read_word(&syncstrings[mode.syncstate]));
-    if (mode.syncstate != Ok) {
-      display.fillRect(SYNC_CARD_X0+1,SYNC_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SSD1306_INVERSE);
-    }
+    //display.fillRect(SYNC_CARD_X0, SYNC_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SH110X_BLACK);
+    //display.drawRect(SYNC_CARD_X0, SYNC_CARD_Y0,CARD_WIDTH,CARD_HEIGHT,SH110X_WHITE);
+    //display.setTextSize(1);
+    //display.setCursor(SYNC_CARD_X0+2+6, SYNC_CARD_Y0+2);
+    //display.print(F("SYNC"));
+    //display.setCursor(SYNC_CARD_X0+2, SYNC_CARD_Y0+11);
+    drawCard2(SYNC_CARD_X0, SYNC_CARD_Y0, F("SYNC"), (__FlashStringHelper *)pgm_read_word(&syncstrings[mode.syncstate]), (mode.syncstate != Ok));
+    //display.print((__FlashStringHelper *)pgm_read_word(&syncstrings[mode.syncstate]));
+    //if (mode.syncstate != Ok) {
+    //  display.fillRect(SYNC_CARD_X0+1,SYNC_CARD_Y0+1,CARD_WIDTH-2,CARD_HEIGHT-2,SH110X_INVERSE);
+    //}
     flags.displaychange = true;
   }
 }
 
 void displaySync() {
+  if (displaybusy) { return; } // bail if display is currently writing
   display.clearDisplay();
   // instructions
   display.setTextSize(1);
@@ -787,9 +857,10 @@ void formatTimeHHMM(char* buf, uint8_t h, uint8_t m) {
 }
 
 void displaySplash() {
+  if (displaybusy) { return; } // bail if display is currently writing
   display.clearDisplay();
   display.setTextSize(2);
-  display.setTextColor(SSD1306_WHITE);
+  display.setTextColor(SH110X_WHITE);
   display.setCursor(0, 0);
   display.print(F("DEKA CTRL"));
   display.setTextSize(1);
@@ -799,6 +870,9 @@ void displaySplash() {
   display.print(F(__TIME__));
   display.setTextSize(1);
   flags.displaychange = true;
+  displaybusy = true;
+  display.display(); // force update display (loop including updated not yet be running)
+  displaybusy = false;
 }
 
 void processGPS() {
@@ -821,7 +895,7 @@ void processGPS() {
               if (!status.gps_hastime) { madechanges = false; }
               status.gps_hastime = true;
               if (s==0) {
-                if ((mode.syncstate==Ok) && (m%10==0)) { // in sync, and it's a 10-minute line
+                if ((m==0) && (mode.syncstate==Ok)) { // in sync, and it's a on the hour
                   drifthistory_append(drift_current); // append last measured drift history
                   displayUpdateDrift();
                 }
@@ -932,9 +1006,11 @@ void loop() {
     }
     // if pending display update, update the display
     if (flags.displaychange) {
+      displaybusy = true;
       display.display();
       flags.displaychange = false;
     }
+    displaybusy = false;
     if (subdiv%TICKDIV2==0) {
       // update LED status
       if (syncRunning()) {
