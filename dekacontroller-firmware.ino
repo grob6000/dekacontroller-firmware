@@ -7,8 +7,6 @@
 #include <avr/interrupt.h>
 #include <avr/io.h>
 #include <avr/eeprom.h>
-
-#define NEOPIXEL_INVERT
 #include <Adafruit_NeoPixel.h>
 
 #include "dekacontroller_types.h"
@@ -144,7 +142,7 @@ volatile ChangeFlags flags = {
   .runchange=false
 };
 
-const char syncstring0[] PROGMEM = "SYNC";
+const char syncstring0[] PROGMEM = "OK";
 const char syncstring1[] PROGMEM = "BEGIN";
 const char syncstring2[] PROGMEM = "ZERO MIN";
 const char syncstring3[] PROGMEM = "ZERO HR";
@@ -210,6 +208,7 @@ void setLocalTime(uint8_t hour_utc, uint8_t minute_utc, uint8_t second_utc) {
 #define DRIFT_HISTORY_LENGTH 24 // 10 min interval for 6h
 #define DRIFT_THRESHOLD_WARNING 30 // seconds before drift warning (30 secs)
 #define DRIFT_THRESHOLD_ERROR 1800 // seconds before deciding failed (30 mins)
+#define DRIFT_HISTORY_YLIM_MIN 10 // minimum extent of y-axis (+/-) for history graph & interval by which this is increased
 int16_t drift_history[DRIFT_HISTORY_LENGTH] = {0};
 uint8_t drift_history_index = 0; // index for drift history (circular buffer)
 volatile int16_t drift_current = 0; // value to be updated live
@@ -568,7 +567,7 @@ void refreshDisplay(void) {
             display.fillRect(0,16,SCREEN_WIDTH,SCREEN_HEIGHT-16,SH110X_BLACK);
           }
           // determine scale
-          int16_t fullscale = (drifthistory_getmaxmagnitude()/20 + 1)*20;
+          int16_t fullscale = (drifthistory_getmaxmagnitude()/DRIFT_HISTORY_YLIM_MIN + 1)*DRIFT_HISTORY_YLIM_MIN;
           // graph
           display.drawFastVLine(GRAPH_X0, GRAPH_Y0-GRAPH_HEIGHT-2,GRAPH_Y0+GRAPH_HEIGHT+2,SH110X_WHITE); // vertical axis
           display.drawFastHLine(GRAPH_X0-2,GRAPH_Y0-GRAPH_HEIGHT,2,SH110X_WHITE); // top tick
@@ -589,12 +588,10 @@ void refreshDisplay(void) {
           display.print(F("-"));
           display.print(fullscale/2);
           // print value next to graph
-          display.setCursor(GRAPH_X0+GRAPH_WIDTH+2,GRAPH_Y0-4);
-          if (drift_current >= 0) {
-            display.print(F("+"));
-          }
-          display.print(drift_current);
-          display.print('s');
+          char driftdisplay[8] = "";
+          uint8_t l = snprintf_P(driftdisplay, 8, PSTR("%+ds"), drift_current);
+          display.setCursor(SCREEN_WIDTH - (SCREEN_WIDTH-GRAPH_X0-GRAPH_WIDTH)/2 - l*3,GRAPH_Y0-4);
+          display.print(driftdisplay);
           // data
           for (uint8_t i = 0; i < DRIFT_HISTORY_LENGTH; i++) {
             display.drawPixel(GRAPH_X0+(i*GRAPH_WIDTH)/DRIFT_HISTORY_LENGTH,GRAPH_Y0-drifthistory_getat(DRIFT_HISTORY_LENGTH-i-1)*GRAPH_HEIGHT/fullscale,SH110X_WHITE);
@@ -624,7 +621,8 @@ void refreshDisplay(void) {
             char s[] = "00:00";
             formatTimeHHMM(s, marktime/60, marktime%60);
             display.print(s);
-          }
+          }+
+          
         }
         break;
       case Main:
@@ -656,7 +654,7 @@ void refreshDisplay(void) {
             drawCard2(DRIFT_CARD_X0, DRIFT_CARD_Y0, F("DRIFT"), F("ERROR"), false);
           } else {
             char driftstr[CARD_MAX_CHARS+1] = "";
-            snprintf_P(driftstr, CARD_MAX_CHARS+1, PSTR("%+d"), drift_current);
+            snprintf_P(driftstr, CARD_MAX_CHARS+1, PSTR("%+ds"), drift_current);
             drawCard(DRIFT_CARD_X0, DRIFT_CARD_Y0, F("DRIFT"), driftstr, false);
           }
         }
@@ -694,7 +692,13 @@ void m0low() {
       checkok = false;
     }        
     if (checkok) {
-      drift_current = (timetracked - (hour_local*60 + minute_local))*60 - second_local; // update live drift (pushed into array by GPS clock)
+      int16_t drift_minutes = timetracked - (hour_local*60 + minute_local);
+      if (drift_minutes < -1*(MINUTESPERDAY/2)) {
+        drift_minutes += MINUTESPERDAY;
+      } else if (drift_minutes > (MINUTESPERDAY/2)) {
+        drift_minutes -= MINUTESPERDAY;
+      }
+      drift_current = (drift_minutes)*60 - second_local; // update live drift (pushed into array by GPS clock)
       if (abs(drift_current) < DRIFT_THRESHOLD_WARNING) {
         status.time_drift = false;
       } else if (abs(drift_current) < DRIFT_THRESHOLD_ERROR) {
@@ -899,7 +903,7 @@ void loop() {
         setLamp(pixels.Color(255,128,0), FLASHSETTING_SLOW); // orange, slow flash
       } else {
         // ok
-        setLamp(pixels.Color(0,255,0), FLASHSETTING_NONE); // green, steady
+        setLamp(pixels.Color(0,0,0), FLASHSETTING_NONE); // off, steady (green is ugly)
       }
       //pixels.show();
       if (gpstimeout > GPSTIMEOUT) {
@@ -1083,6 +1087,7 @@ void loop() {
             status.time_error = false; // clear only when sync successful
             mode.syncstate = Ok;
             flags.syncchange = true;
+            drift_current = 0; // reset drift to zero
           }
           break;
         case Ok:
