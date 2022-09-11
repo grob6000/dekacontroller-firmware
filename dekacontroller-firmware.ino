@@ -621,7 +621,7 @@ void refreshDisplay(void) {
             char s[] = "00:00";
             formatTimeHHMM(s, marktime/60, marktime%60);
             display.print(s);
-          }+
+          }
           
         }
         break;
