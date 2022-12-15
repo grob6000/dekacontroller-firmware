@@ -1,3 +1,7 @@
+#!/usr/bin/env python
+
+"""gpsemulator.py: Pretends to be a GPS receiver, NEMA protocol. Provide port name as first argument or hardcode below."""
+
 from cProfile import run
 from operator import xor
 from re import ASCII
@@ -5,8 +9,10 @@ import serial
 import sys
 import datetime
 
+# globals
+portname = "COM99"
+
 if __name__ == "__main__":
-  portname = "COM99"
   if len(sys.argv) > 1:
     portname = sys.argv[1]
   ser = None
