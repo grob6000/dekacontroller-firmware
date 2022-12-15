@@ -19,12 +19,12 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <pins_arduino.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SH110X.h>
+#include <Adafruit_GFX.h> // https://github.com/adafruit/Adafruit-GFX-Library
+#include <Adafruit_SH110X.h> // https://github.com/adafruit/Adafruit_SH110X
 #include <avr/interrupt.h>
 #include <avr/io.h>
 #include <avr/eeprom.h>
-#include <Adafruit_NeoPixel.h>
+#include <Adafruit_NeoPixel.h> // https://github.com/adafruit/Adafruit_NeoPixel
 
 #include "dekacontroller_types.h"
 
